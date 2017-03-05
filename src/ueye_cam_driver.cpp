@@ -54,8 +54,6 @@ using namespace std;
 namespace ueye_cam {
 
 
-// Note that all of these default settings will be overwritten
-// by syncCamConfig() during connectCam()
 UEyeCamDriver::UEyeCamDriver(int cam_ID, string cam_name) :
     cam_handle_((HIDS) 0),
     cam_buffer_(NULL),
@@ -72,12 +70,12 @@ UEyeCamDriver::UEyeCamDriver(int cam_ID, string cam_name) :
   cam_aoi_.s32Y = 0;
   cam_aoi_.s32Width = 640;
   cam_aoi_.s32Height = 480;
-}
+};
 
 
 UEyeCamDriver::~UEyeCamDriver() {
   disconnectCam();
-}
+};
 
 
 INT UEyeCamDriver::connectCam(int new_cam_ID) {
@@ -99,7 +97,8 @@ INT UEyeCamDriver::connectCam(int new_cam_ID) {
     return is_err;
   } else if (numCameras < 1) {
     ERROR_STREAM("No UEye cameras are connected\n");
-    ERROR_STREAM("Hint: make sure that the IDS camera daemon (/etc/init.d/ueyeusbdrc) is running\n");
+    ERROR_STREAM("Hint 1: if you installed ros-*-ueye-cam via apt, you will still need to install the official IDS uEye drivers: http://en.ids-imaging.com/download-ueye.html");
+    ERROR_STREAM("Hint 2: make sure that the IDS camera daemon (/etc/init.d/ueyeusbdrc) is running\n");
     return IS_NO_SUCCESS;
   } // NOTE: previously checked if ID < numCameras, but turns out that ID can be arbitrary
 
@@ -110,8 +109,8 @@ INT UEyeCamDriver::connectCam(int new_cam_ID) {
     INT uploadTimeMSEC = 25000;
     is_GetDuration (cam_handle_, IS_STARTER_FW_UPLOAD, &uploadTimeMSEC);
 
-    INFO_STREAM("Uploading new firmware to [" << cam_name_
-      << "]; please wait for about " << uploadTimeMSEC/1000.0 << " seconds");
+    INFO_STREAM("Uploading new firmware to UEye camera '" << cam_name_
+      << "'; please wait for about " << uploadTimeMSEC/1000.0 << " seconds");
 
     // Attempt to re-open camera handle while triggering automatic firmware upload
     cam_handle_ = (HIDS) (((INT) cam_handle_) | IS_ALLOW_STARTER_FW_UPLOAD);
@@ -125,29 +124,15 @@ INT UEyeCamDriver::connectCam(int new_cam_ID) {
 
   // Set display mode to Device Independent Bitmap (DIB)
   is_err = is_SetDisplayMode(cam_handle_, IS_SET_DM_DIB);
-  if (is_err != IS_SUCCESS) {
-    ERROR_STREAM("UEye camera ID " << cam_id_ <<
-      " does not support Device Independent Bitmap mode;" <<
-      " driver wrapper not compatible with OpenGL/DirectX modes (" << err2str(is_err) << ")");
-    return is_err;
-  }
 
   // Fetch sensor parameters
   is_err = is_GetSensorInfo(cam_handle_, &cam_sensor_info_);
-  if (is_err != IS_SUCCESS) {
-    ERROR_STREAM("Could not poll sensor information for [" << cam_name_ <<
-      "] (" << err2str(is_err) << ")");
-    return is_err;
-  }
-  
-  // Validate camera's configuration to ensure compatibility with driver wrapper
-  // (note that this function also initializes the internal frame buffer)
-  if ((is_err = syncCamConfig()) != IS_SUCCESS) return is_err;
-  
-  DEBUG_STREAM("Connected to [" + cam_name_ + "]");
+
+  // Initialize local camera frame buffer
+  reallocateCamBuffer();
 
   return is_err;
-}
+};
 
 
 INT UEyeCamDriver::disconnectCam() {
@@ -166,14 +151,14 @@ INT UEyeCamDriver::disconnectCam() {
     is_err = is_ExitCamera(cam_handle_);
     cam_handle_ = (HIDS) 0;
 
-    DEBUG_STREAM("Disconnected from [" + cam_name_ + "]");
+    DEBUG_STREAM("Disconnected UEye camera '" + cam_name_ + "'");
   }
 
   return is_err;
-}
+};
 
 
-INT UEyeCamDriver::loadCamConfig(string filename, bool ignore_load_failure) {
+INT UEyeCamDriver::loadCamConfig(string filename) {
   if (!isConnected()) return IS_INVALID_CAMERA_HANDLE;
 
   INT is_err = IS_SUCCESS;
@@ -182,22 +167,36 @@ INT UEyeCamDriver::loadCamConfig(string filename, bool ignore_load_failure) {
   const wstring filenameU(filename.begin(), filename.end());
   if ((is_err = is_ParameterSet(cam_handle_, IS_PARAMETERSET_CMD_LOAD_FILE,
       (void*) filenameU.c_str(), 0)) != IS_SUCCESS) {
-    WARN_STREAM("Could not load [" << cam_name_
-      << "]'s sensor parameters file " << filename << " (" << err2str(is_err) << ")");
-    if (ignore_load_failure) is_err = IS_SUCCESS;
+    WARN_STREAM("Could not load UEye camera '" << cam_name_
+      << "' sensor parameters file " << filename << " (" << err2str(is_err) << ")");
     return is_err;
   } else {
-    // After loading configuration settings, need to re-ensure that camera's
-    // current configuration is supported by this driver wrapper
-    // (note that this function also initializes the internal frame buffer)
-    if ((is_err = syncCamConfig()) != IS_SUCCESS) return is_err;
+    // Update the AOI and bits per pixel
+    if ((is_err = is_AOI(cam_handle_, IS_AOI_IMAGE_GET_AOI,
+        (void*) &cam_aoi_, sizeof(cam_aoi_))) != IS_SUCCESS) {
+      ERROR_STREAM("Could not retrieve Area Of Interest from UEye camera '" <<
+          cam_name_ << "' (" << err2str(is_err) << ")");
+      return is_err;
+    }
+    INT colorMode = is_SetColorMode(cam_handle_, IS_GET_COLOR_MODE);
+    if (colorMode == IS_CM_BGR8_PACKED || colorMode == IS_CM_RGB8_PACKED) {
+      bits_per_pixel_ = 24;
+    } else if (colorMode == IS_CM_MONO8 || colorMode == IS_CM_SENSOR_RAW8) {
+      bits_per_pixel_ = 8;
+    } else {
+      WARN_STREAM("Current camera color mode is not supported by this wrapper;" <<
+          "supported modes: {MONO8 | RGB8 | BAYER_RGGB8}; switching to RGB8 (24-bit)");
+      if ((is_err = setColorMode("rgb8", false)) != IS_SUCCESS) return is_err;
+    }
 
-    DEBUG_STREAM("Successfully loaded sensor parameter file for [" << cam_name_ <<
-      "]: " << filename);
+    reallocateCamBuffer();
+
+    DEBUG_STREAM("Successfully loaded UEye camera '" << cam_name_
+      << "'s sensor parameter file: " << filename);
   }
 
   return is_err;
-}
+};
 
 
 INT UEyeCamDriver::setColorMode(string mode, bool reallocate_buffer) {
@@ -211,38 +210,28 @@ INT UEyeCamDriver::setColorMode(string mode, bool reallocate_buffer) {
   // Set to specified color mode
   if (mode == "rgb8") {
     if ((is_err = is_SetColorMode(cam_handle_, IS_CM_RGB8_PACKED)) != IS_SUCCESS) {
-      ERROR_STREAM("Could not set color mode of [" << cam_name_ <<
-        "] to RGB8 (" << err2str(is_err) << ")");
-      return is_err;
-    }
-    bits_per_pixel_ = 24;
-  } else if (mode == "bgr8") {
-    if ((is_err = is_SetColorMode(cam_handle_, IS_CM_BGR8_PACKED)) != IS_SUCCESS) {
-      ERROR_STREAM("Could not set color mode of [" << cam_name_ <<
-        "] to BGR8 (" << err2str(is_err) << ")");
+      ERROR_STREAM("Could not set color mode to RGB8 (" << err2str(is_err) << ")");
       return is_err;
     }
     bits_per_pixel_ = 24;
   } else if (mode == "bayer_rggb8") {
     if ((is_err = is_SetColorMode(cam_handle_, IS_CM_SENSOR_RAW8)) != IS_SUCCESS) {
-      ERROR_STREAM("Could not set color mode of [" << cam_name_ <<
-        "] to BAYER_RGGB8 (" << err2str(is_err) << ")");
+      ERROR_STREAM("Could not set color mode to BAYER_RGGB8 (" << err2str(is_err) << ")");
       return is_err;
     }
     bits_per_pixel_ = 8;
   } else { // Default to MONO8
     if ((is_err = is_SetColorMode(cam_handle_, IS_CM_MONO8)) != IS_SUCCESS) {
-      ERROR_STREAM("Could not set color mode of [" << cam_name_ <<
-        "] to MONO8 (" << err2str(is_err) << ")");
+      ERROR_STREAM("Could not set color mode to MONO8 (" << err2str(is_err) << ")");
       return is_err;
     }
     bits_per_pixel_ = 8;
   }
 
-  DEBUG_STREAM("Updated color mode to " << mode << "for [" << cam_name_ << "]");
+  DEBUG_STREAM("Updated color mode to " << mode);
 
   return (reallocate_buffer ? reallocateCamBuffer() : IS_SUCCESS);
-}
+};
 
 
 INT UEyeCamDriver::setResolution(INT& image_width, INT& image_height,
@@ -255,18 +244,18 @@ INT UEyeCamDriver::setResolution(INT& image_width, INT& image_height,
   CAP(image_width, 8, (INT) cam_sensor_info_.nMaxWidth);
   CAP(image_height, 4, (INT) cam_sensor_info_.nMaxHeight);
   if (image_left >= 0 && (int) cam_sensor_info_.nMaxWidth - image_width - image_left < 0) {
-    WARN_STREAM("Cannot set AOI left index to " <<
-        image_left << " with a frame width of " <<
+    WARN_STREAM("Cannot set image left index to " <<
+        image_left << " with an image width of " <<
         image_width << " and sensor max width of " <<
-        cam_sensor_info_.nMaxWidth << " for [" << cam_name_ << "]");
+        cam_sensor_info_.nMaxWidth);
     image_left = -1;
   }
   if (image_top >= 0 &&
       (int) cam_sensor_info_.nMaxHeight - image_height - image_top < 0) {
-    WARN_STREAM("Cannot set AOI top index to " <<
-        image_top << " with a frame height of " <<
+    WARN_STREAM("Cannot set image top index to " <<
+        image_top << " with an image height of " <<
         image_height << " and sensor max height of " <<
-        cam_sensor_info_.nMaxHeight << " for [" << cam_name_ << "]");
+        cam_sensor_info_.nMaxHeight);
     image_top = -1;
   }
   cam_aoi_.s32X = (image_left < 0) ?
@@ -276,20 +265,17 @@ INT UEyeCamDriver::setResolution(INT& image_width, INT& image_height,
   cam_aoi_.s32Width = image_width;
   cam_aoi_.s32Height = image_height;
   if ((is_err = is_AOI(cam_handle_, IS_AOI_IMAGE_SET_AOI, &cam_aoi_, sizeof(cam_aoi_))) != IS_SUCCESS) {
-    ERROR_STREAM("Failed to set Area Of Interest (AOI) to " <<
+    ERROR_STREAM("Failed to set UEye camera sensor's Area Of Interest to " <<
       image_width << " x " << image_height <<
-      " with top-left corner at (" << cam_aoi_.s32X << ", " << cam_aoi_.s32Y <<
-      ") for [" << cam_name_ << "]" );
+      " with top-left corner at (" << cam_aoi_.s32X << ", " << cam_aoi_.s32Y << ")" );
     return is_err;
   }
 
-  DEBUG_STREAM("Updated Area Of Interest (AOI) to " <<
-    image_width << " x " << image_height <<
-    " with top-left corner at (" << cam_aoi_.s32X << ", " << cam_aoi_.s32Y <<
-    ") for [" << cam_name_ << "]");
+  DEBUG_STREAM("Updated resolution to " << image_width << " x " << image_height <<
+      " @ (" << image_left << ", " << image_top << ")");
 
   return (reallocate_buffer ? reallocateCamBuffer() : IS_SUCCESS);
-}
+};
 
 
 INT UEyeCamDriver::setSubsampling(int& rate, bool reallocate_buffer) {
@@ -321,8 +307,7 @@ INT UEyeCamDriver::setSubsampling(int& rate, bool reallocate_buffer) {
       rate_flag = IS_SUBSAMPLING_16X;
       break;
     default:
-      WARN_STREAM("[" << cam_name_ << "] currently has unsupported subsampling rate: " <<
-        rate << ", resetting to 1X");
+      WARN_STREAM("Invalid or unsupported subsampling rate: " << rate << ", resetting to 1X");
       rate = 1;
       rate_flag = IS_SUBSAMPLING_DISABLE;
       break;
@@ -330,12 +315,11 @@ INT UEyeCamDriver::setSubsampling(int& rate, bool reallocate_buffer) {
 
   if ((supportedRates & rate_flag) == rate_flag) {
     if ((is_err = is_SetSubSampling(cam_handle_, rate_flag)) != IS_SUCCESS) {
-      ERROR_STREAM("Failed to set subsampling rate to " <<
-        rate << "X for [" << cam_name_ << "] (" << err2str(is_err) << ")");
+      ERROR_STREAM("Could not set subsampling rate to " << rate << "X (" << err2str(is_err) << ")");
       return is_err;
     }
   } else {
-    WARN_STREAM("[" << cam_name_ << "] does not support requested sampling rate of " << rate);
+    WARN_STREAM("Camera does not support requested sampling rate of " << rate);
 
     // Query current rate
     INT currRate = is_SetSubSampling(cam_handle_, IS_GET_SUBSAMPLING);
@@ -345,23 +329,21 @@ INT UEyeCamDriver::setSubsampling(int& rate, bool reallocate_buffer) {
     else if (currRate == IS_SUBSAMPLING_8X) { rate = 8; }
     else if (currRate == IS_SUBSAMPLING_16X) { rate = 16; }
     else {
-      WARN_STREAM("[" << cam_name_ << "] currently has an unsupported sampling rate (" <<
-        currRate << "), resetting to 1X");
+      WARN_STREAM("Camera has unsupported sampling rate (" << currRate << "), resetting to 1X");
       if ((is_err = is_SetSubSampling(cam_handle_, IS_SUBSAMPLING_DISABLE)) != IS_SUCCESS) {
-        ERROR_STREAM("Failed to set subsampling rate to 1X for [" << cam_name_ << "] (" <<
-          err2str(is_err) << ")");
+        ERROR_STREAM("Could not set subsampling rate to 1X (" << err2str(is_err) << ")");
         return is_err;
       }
     }
     return IS_SUCCESS;
   }
 
-  DEBUG_STREAM("Updated subsampling rate to " << rate << "X for [" << cam_name_ << "]");
+  DEBUG_STREAM("Updated subsampling rate to " << rate << "X");
 
   cam_subsampling_rate_ = rate;
 
   return (reallocate_buffer ? reallocateCamBuffer() : IS_SUCCESS);
-}
+};
 
 
 INT UEyeCamDriver::setBinning(int& rate, bool reallocate_buffer) {
@@ -393,8 +375,7 @@ INT UEyeCamDriver::setBinning(int& rate, bool reallocate_buffer) {
       rate_flag = IS_BINNING_16X;
       break;
     default:
-      WARN_STREAM("[" << cam_name_ << "] currently has unsupported binning rate: " <<
-        rate << ", resetting to 1X");
+      WARN_STREAM("Invalid or unsupported binning rate: " << rate << ", resetting to 1X");
       rate = 1;
       rate_flag = IS_BINNING_DISABLE;
       break;
@@ -402,12 +383,11 @@ INT UEyeCamDriver::setBinning(int& rate, bool reallocate_buffer) {
 
   if ((supportedRates & rate_flag) == rate_flag) {
     if ((is_err = is_SetBinning(cam_handle_, rate_flag)) != IS_SUCCESS) {
-      ERROR_STREAM("Could not set binning rate for [" << cam_name_ << "] to " <<
-        rate << "X (" << err2str(is_err) << ")");
+      ERROR_STREAM("Could not set binning rate to " << rate << "X (" << err2str(is_err) << ")");
       return is_err;
     }
   } else {
-    WARN_STREAM("[" << cam_name_ << "] does not support requested binning rate of " << rate);
+    WARN_STREAM("Camera does not support requested binning rate of " << rate);
 
     // Query current rate
     INT currRate = is_SetBinning(cam_handle_, IS_GET_BINNING);
@@ -417,23 +397,21 @@ INT UEyeCamDriver::setBinning(int& rate, bool reallocate_buffer) {
     else if (currRate == IS_BINNING_8X) { rate = 8; }
     else if (currRate == IS_BINNING_16X) { rate = 16; }
     else {
-      WARN_STREAM("[" << cam_name_ << "] currently has an unsupported binning rate (" <<
-        currRate << "), resetting to 1X");
+      WARN_STREAM("Camera has unsupported binning rate (" << currRate << "), resetting to 1X");
       if ((is_err = is_SetBinning(cam_handle_, IS_BINNING_DISABLE)) != IS_SUCCESS) {
-        ERROR_STREAM("Failed to set binning rate for [" << cam_name_ << "] to 1X (" <<
-          err2str(is_err) << ")");
+        ERROR_STREAM("Could not set binning rate to 1X (" << err2str(is_err) << ")");
         return is_err;
       }
     }
     return IS_SUCCESS;
   }
 
-  DEBUG_STREAM("Updated binning rate to " << rate << "X for [" << cam_name_ << "]");
+  DEBUG_STREAM("Updated binning rate to " << rate << "X");
 
   cam_binning_rate_ = rate;
 
   return (reallocate_buffer ? reallocateCamBuffer() : IS_SUCCESS);
-}
+};
 
 
 INT UEyeCamDriver::setSensorScaling(double& rate, bool reallocate_buffer) {
@@ -447,44 +425,43 @@ INT UEyeCamDriver::setSensorScaling(double& rate, bool reallocate_buffer) {
   SENSORSCALERINFO sensorScalerInfo;
   is_err = is_GetSensorScalerInfo(cam_handle_, &sensorScalerInfo, sizeof(sensorScalerInfo));
   if (is_err == IS_NOT_SUPPORTED) {
-    WARN_STREAM("[" << cam_name_ << "] does not support internal image scaling");
+    WARN_STREAM("Internal image scaling is not supported by camera");
     rate = 1.0;
     cam_sensor_scaling_rate_ = 1.0;
     return IS_SUCCESS;
   } else if (is_err != IS_SUCCESS) {
-    ERROR_STREAM("Failed to obtain supported internal image scaling information for [" <<
-      cam_name_ << "] (" << err2str(is_err) << ")");
+    ERROR_STREAM("Could not obtain supported internal image scaling information (" <<
+        err2str(is_err) << ")");
     rate = 1.0;
     cam_sensor_scaling_rate_ = 1.0;
     return is_err;
   } else {
     if (rate < sensorScalerInfo.dblMinFactor || rate > sensorScalerInfo.dblMaxFactor) {
       WARN_STREAM("Requested internal image scaling rate of " << rate <<
-          " is not within supported bounds for [" << cam_name_ << "]: " <<
-            sensorScalerInfo.dblMinFactor << ", " << sensorScalerInfo.dblMaxFactor <<
-            "; not updating current rate of " << sensorScalerInfo.dblCurrFactor);
+          " is not within supported bounds of [" << sensorScalerInfo.dblMinFactor <<
+          ", " << sensorScalerInfo.dblMaxFactor << "]; not updating current rate of " <<
+          sensorScalerInfo.dblCurrFactor);
       rate = sensorScalerInfo.dblCurrFactor;
       return IS_SUCCESS;
     }
   }
 
   if ((is_err = is_SetSensorScaler(cam_handle_, IS_ENABLE_SENSOR_SCALER, rate)) != IS_SUCCESS) {
-    WARN_STREAM("Failed to set internal image scaling rate for [" << cam_name_ <<
-      "] to " << rate << "X (" << err2str(is_err) << "); resetting to 1X");
+    WARN_STREAM("Could not set internal image scaling rate to " << rate << "X (" <<
+        err2str(is_err) << "); resetting to 1X");
     rate = 1.0;
     if ((is_err = is_SetSensorScaler(cam_handle_, IS_ENABLE_SENSOR_SCALER, rate)) != IS_SUCCESS) {
-      ERROR_STREAM("Failed to set internal image scaling rate for [" << cam_name_ <<
-        "] to 1X (" << err2str(is_err) << ")");
+      ERROR_STREAM("Could not set internal image scaling rate to 1X (" << err2str(is_err) << ")");
       return is_err;
     }
   }
 
-  DEBUG_STREAM("Updated internal image scaling rate to " << rate << "X for [" << cam_name_ << "]");
+  DEBUG_STREAM("Updated internal image scaling rate to " << rate << "X");
 
   cam_sensor_scaling_rate_ = rate;
 
   return (reallocate_buffer ? reallocateCamBuffer() : IS_SUCCESS);
-}
+};
 
 
 INT UEyeCamDriver::setGain(bool& auto_gain, INT& master_gain_prc, INT& red_gain_prc,
@@ -508,7 +485,8 @@ INT UEyeCamDriver::setGain(bool& auto_gain, INT& master_gain_prc, INT& red_gain_
         &pval1, &pval2)) != IS_SUCCESS) {
       if ((is_err = is_SetAutoParameter(cam_handle_, IS_SET_ENABLE_AUTO_GAIN,
           &pval1, &pval2)) != IS_SUCCESS) {
-        WARN_STREAM("[" << cam_name_ << "] does not support auto gain mode (" << err2str(is_err) << ")");
+        WARN_STREAM("Auto gain mode is not supported for UEye camera '" <<
+            cam_name_ << "' (" << err2str(is_err) << ")");
         auto_gain = false;
       }
     }
@@ -518,7 +496,8 @@ INT UEyeCamDriver::setGain(bool& auto_gain, INT& master_gain_prc, INT& red_gain_
         &pval1, &pval2)) != IS_SUCCESS) {
       if ((is_err = is_SetAutoParameter(cam_handle_, IS_SET_ENABLE_AUTO_GAIN,
           &pval1, &pval2)) != IS_SUCCESS) {
-        DEBUG_STREAM("[" << cam_name_ << "] does not support auto gain mode (" << err2str(is_err) << ")");
+        DEBUG_STREAM("Auto gain mode is not supported for UEye camera '" <<
+            cam_name_ << "' (" << err2str(is_err) << ")");
       }
     }
 
@@ -530,7 +509,7 @@ INT UEyeCamDriver::setGain(bool& auto_gain, INT& master_gain_prc, INT& red_gain_
           (gain_boost) ? IS_SET_GAINBOOST_ON : IS_SET_GAINBOOST_OFF))
           != IS_SUCCESS) {
         WARN_STREAM("Failed to " << ((gain_boost) ? "enable" : "disable") <<
-            " gain boost for [" << cam_name_ << "] (" << err2str(is_err) << ")");
+            " gain boost for UEye camera '" + cam_name_ + "'");
       }
     }
 
@@ -539,24 +518,23 @@ INT UEyeCamDriver::setGain(bool& auto_gain, INT& master_gain_prc, INT& red_gain_
         red_gain_prc, green_gain_prc, blue_gain_prc)) != IS_SUCCESS) {
       WARN_STREAM("Failed to set manual gains (master: " << master_gain_prc <<
           "; red: " << red_gain_prc << "; green: " << green_gain_prc <<
-          "; blue: " << blue_gain_prc << ") for [" << cam_name_ << "] (" <<
-          err2str(is_err) << ")");
+          "; blue: " << blue_gain_prc << ") for UEye camera '" + cam_name_ + "'");
     }
   }
 
   if (auto_gain) {
-    DEBUG_STREAM("Updated gain for [" << cam_name_ << "]: auto");
+    DEBUG_STREAM("Updated gain: auto");
   } else {
-    DEBUG_STREAM("Updated gain for [" << cam_name_ << "]: manual" <<
-        "\n  master gain: " << master_gain_prc <<
-        "\n  red gain: " << red_gain_prc <<
-        "\n  green gain: " << green_gain_prc <<
-        "\n  blue gain: " << blue_gain_prc <<
-        "\n  gain boost: " << gain_boost);
+    DEBUG_STREAM("Updated gain: manual" <<
+        "\n   - master gain: " << master_gain_prc <<
+        "\n   - red gain: " << red_gain_prc <<
+        "\n   - green gain: " << green_gain_prc <<
+        "\n   - blue gain: " << blue_gain_prc <<
+        "\n   - gain boost: " << gain_boost);
   }
 
   return is_err;
-}
+};
 
 
 INT UEyeCamDriver::setExposure(bool& auto_exposure, double& exposure_ms) {
@@ -572,8 +550,8 @@ INT UEyeCamDriver::setExposure(bool& auto_exposure, double& exposure_ms) {
       &pval1, &pval2)) != IS_SUCCESS) {
     if ((is_err = is_SetAutoParameter(cam_handle_, IS_SET_ENABLE_AUTO_SHUTTER,
         &pval1, &pval2)) != IS_SUCCESS) {
-      WARN_STREAM("Auto exposure mode is not supported for [" << cam_name_ <<
-        "] (" << err2str(is_err) << ")");
+      WARN_STREAM("Auto exposure mode is not supported for UEye camera '" <<
+          cam_name_ << "' (" << err2str(is_err) << ")");
       auto_exposure = false;
     }
   }
@@ -585,7 +563,7 @@ INT UEyeCamDriver::setExposure(bool& auto_exposure, double& exposure_ms) {
         (void*) &minExposure, sizeof(minExposure))) != IS_SUCCESS) ||
         ((is_err = is_Exposure(cam_handle_, IS_EXPOSURE_CMD_GET_EXPOSURE_RANGE_MAX,
         (void*) &maxExposure, sizeof(maxExposure))) != IS_SUCCESS)) {
-      ERROR_STREAM("Failed to query valid exposure range from [" << cam_name_ << "]");
+      ERROR_STREAM("Failed to query valid exposure range from UEye camera '" << cam_name_ << "'");
       return is_err;
     }
     CAP(exposure_ms, minExposure, maxExposure);
@@ -594,16 +572,16 @@ INT UEyeCamDriver::setExposure(bool& auto_exposure, double& exposure_ms) {
     if ((is_err = is_Exposure(cam_handle_, IS_EXPOSURE_CMD_SET_EXPOSURE,
         (void*) &(exposure_ms), sizeof(exposure_ms))) != IS_SUCCESS) {
       ERROR_STREAM("Failed to set exposure to " << exposure_ms <<
-          " ms for [" << cam_name_ << "]");
+          " ms for UEye camera '" << cam_name_ << "'");
       return is_err;
     }
   }
 
   DEBUG_STREAM("Updated exposure: " << ((auto_exposure) ? "auto" : to_string(exposure_ms)) <<
-      " ms for [" << cam_name_ << "]");
+      " ms");
 
   return is_err;
-}
+};
 
 
 INT UEyeCamDriver::setWhiteBalance(bool& auto_white_balance, INT& red_offset,
@@ -622,8 +600,8 @@ INT UEyeCamDriver::setWhiteBalance(bool& auto_white_balance, INT& red_offset,
       &pval1, &pval2)) != IS_SUCCESS) {
     if ((is_err = is_SetAutoParameter(cam_handle_, IS_SET_AUTO_WB_ONCE,
         &pval1, &pval2)) != IS_SUCCESS) {
-      WARN_STREAM("Auto white balance mode is not supported for [" << cam_name_ <<
-        "] (" << err2str(is_err) << ")");
+      WARN_STREAM("Auto white balance mode is not supported for UEye camera '" <<
+        cam_name_ << "' (" << err2str(is_err) << ")");
       auto_white_balance = false;
     }
   }
@@ -634,17 +612,16 @@ INT UEyeCamDriver::setWhiteBalance(bool& auto_white_balance, INT& red_offset,
         &pval1, &pval2)) != IS_SUCCESS) {
       WARN_STREAM("Failed to set white balance red/blue offsets to " <<
           red_offset << " / " << blue_offset <<
-          " for [" << cam_name_ << "] (" << err2str(is_err) << ")");
+          " for UEye camera '" << cam_name_ << "'");
     }
   }
 
-  DEBUG_STREAM("Updated white balance for [" << cam_name_ << "]: " <<
-    ((auto_white_balance) ? "auto" : "manual") <<
-    "\n  red offset: " << red_offset <<
-    "\n  blue offset: " << blue_offset);
+  DEBUG_STREAM("Updated white balance: " << ((auto_white_balance) ? "auto" : "manual") <<
+  "\n   - red offset: " << red_offset <<
+  "\n   - blue offset: " << blue_offset);
 
   return is_err;
-}
+};
 
 
 INT UEyeCamDriver::setFrameRate(bool& auto_frame_rate, double& frame_rate_hz) {
@@ -671,8 +648,8 @@ INT UEyeCamDriver::setFrameRate(bool& auto_frame_rate, double& frame_rate_hz) {
       &pval1, &pval2)) != IS_SUCCESS) {
     if ((is_err = is_SetAutoParameter(cam_handle_, IS_SET_ENABLE_AUTO_FRAMERATE,
         &pval1, &pval2)) != IS_SUCCESS) {
-      WARN_STREAM("Auto frame rate mode is not supported for [" << cam_name_ <<
-        "] (" << err2str(is_err) << ")");
+      WARN_STREAM("Auto frame rate mode is not supported for UEye camera '" <<
+          cam_name_ << "' (" << err2str(is_err) << ")");
       auto_frame_rate = false;
     }
   }
@@ -680,8 +657,7 @@ INT UEyeCamDriver::setFrameRate(bool& auto_frame_rate, double& frame_rate_hz) {
     // Make sure that user-requested frame rate is achievable
     if ((is_err = is_GetFrameTimeRange(cam_handle_, &minFrameTime,
         &maxFrameTime, &intervalFrameTime)) != IS_SUCCESS) {
-      ERROR_STREAM("Failed to query valid frame rate range from [" << cam_name_ <<
-        "] (" << err2str(is_err) << ")");
+      ERROR_STREAM("Failed to query valid frame rate range from UEye camera '" << cam_name_ << "'");
       return is_err;
     }
     CAP(frame_rate_hz, 1.0/maxFrameTime, 1.0/minFrameTime);
@@ -689,18 +665,17 @@ INT UEyeCamDriver::setFrameRate(bool& auto_frame_rate, double& frame_rate_hz) {
     // Update frame rate
     if ((is_err = is_SetFrameRate(cam_handle_, frame_rate_hz, &newFrameRate)) != IS_SUCCESS) {
       ERROR_STREAM("Failed to set frame rate to " << frame_rate_hz <<
-          " MHz for [" << cam_name_ << "] (" << err2str(is_err) << ")");
+          " MHz for UEye camera '" << cam_name_ << "'");
       return is_err;
     } else if (frame_rate_hz != newFrameRate) {
       frame_rate_hz = newFrameRate;
     }
   }
 
-  DEBUG_STREAM("Updated frame rate for [" << cam_name_ << "]: " <<
-    ((auto_frame_rate) ? "auto" : to_string(frame_rate_hz)) << " Hz");
+  DEBUG_STREAM("Updated frame rate: " << ((auto_frame_rate) ? "auto" : to_string(frame_rate_hz)) << " Hz");
 
   return is_err;
-}
+};
 
 
 INT UEyeCamDriver::setPixelClockRate(INT& clock_rate_mhz) {
@@ -712,16 +687,14 @@ INT UEyeCamDriver::setPixelClockRate(INT& clock_rate_mhz) {
   UINT numberOfSupportedPixelClocks = 0;
   if ((is_err = is_PixelClock(cam_handle_, IS_PIXELCLOCK_CMD_GET_NUMBER,
       (void*) &numberOfSupportedPixelClocks, sizeof(numberOfSupportedPixelClocks))) != IS_SUCCESS) {
-    ERROR_STREAM("Failed to query number of supported pixel clocks from [" << cam_name_ <<
-      "] (" << err2str(is_err) << ")");
+    ERROR_STREAM("Failed to query number of supported pixel clocks from UEye camera '" << cam_name_ << "'");
     return is_err;
   }
   if(numberOfSupportedPixelClocks > 0) {
     ZeroMemory(pixelClockList, sizeof(pixelClockList));
     if((is_err = is_PixelClock(cam_handle_, IS_PIXELCLOCK_CMD_GET_LIST,
        (void*) pixelClockList, numberOfSupportedPixelClocks * sizeof(int))) != IS_SUCCESS) {
-      ERROR_STREAM("Failed to query list of supported pixel clocks from [" << cam_name_ <<
-        "] (" << err2str(is_err) << ")");
+      ERROR_STREAM("Failed to query list of supported pixel clocks from UEye camera '" << cam_name_ << "'");
       return is_err;
     }
   }
@@ -740,14 +713,14 @@ INT UEyeCamDriver::setPixelClockRate(INT& clock_rate_mhz) {
   if ((is_err = is_PixelClock(cam_handle_, IS_PIXELCLOCK_CMD_SET,
       (void*) &(clock_rate_mhz), sizeof(clock_rate_mhz))) != IS_SUCCESS) {
     ERROR_STREAM("Failed to set pixel clock to " << clock_rate_mhz <<
-        "MHz for [" << cam_name_ << "] (" << err2str(is_err) << ")");
+        "MHz for UEye camera '" << cam_name_ << "'");
     return is_err;
   }
 
-  DEBUG_STREAM("Updated pixel clock for [" << cam_name_ << "]: " << clock_rate_mhz << " MHz");
+  DEBUG_STREAM("Updated pixel clock: " << clock_rate_mhz << " MHz");
 
   return IS_SUCCESS;
-}
+};
 
 
 INT UEyeCamDriver::setFlashParams(INT& delay_us, UINT& duration_us) {
@@ -757,14 +730,14 @@ INT UEyeCamDriver::setFlashParams(INT& delay_us, UINT& duration_us) {
   IO_FLASH_PARAMS minFlashParams, maxFlashParams, newFlashParams;
   if ((is_err = is_IO(cam_handle_, IS_IO_CMD_FLASH_GET_PARAMS_MIN,
       (void*) &minFlashParams, sizeof(IO_FLASH_PARAMS))) != IS_SUCCESS) {
-    ERROR_STREAM("Could not retrieve flash parameter info (min) for [" << cam_name_ <<
-      "] (" << err2str(is_err) << ")");
+    ERROR_STREAM("Could not retrieve flash parameter info (min) for UEye camera '" <<
+        cam_name_ << "' (" << err2str(is_err) << ")");
     return is_err;
   }
   if ((is_err = is_IO(cam_handle_, IS_IO_CMD_FLASH_GET_PARAMS_MAX,
       (void*) &maxFlashParams, sizeof(IO_FLASH_PARAMS))) != IS_SUCCESS) {
-    ERROR_STREAM("Could not retrieve flash parameter info (max) for [" << cam_name_ <<
-      "] (" << err2str(is_err) << ")");
+    ERROR_STREAM("Could not retrieve flash parameter info (max) for UEye camera '" <<
+        cam_name_ << "' (" << err2str(is_err) << ")");
     return is_err;
   }
   delay_us = (delay_us < minFlashParams.s32Delay) ? minFlashParams.s32Delay :
@@ -780,13 +753,13 @@ INT UEyeCamDriver::setFlashParams(INT& delay_us, UINT& duration_us) {
   //          and vice versa. This is why the duration is set manually.
   if ((is_err = is_IO(cam_handle_, IS_IO_CMD_FLASH_SET_PARAMS,
       (void*) &newFlashParams, sizeof(IO_FLASH_PARAMS))) != IS_SUCCESS) {
-    ERROR_STREAM("Could not set flash parameter info for [" << cam_name_ <<
-      "] (" << err2str(is_err) << ")");
+    ERROR_STREAM("Could not set flash parameter info for UEye camera '" <<
+        cam_name_ << "' (" << err2str(is_err) << ")");
     return is_err;
   }
 
   return is_err;
-}
+};
 
 
 INT UEyeCamDriver::setFreeRunMode() {
@@ -804,26 +777,26 @@ INT UEyeCamDriver::setFreeRunMode() {
     UINT nMode = IO_FLASH_MODE_FREERUN_HI_ACTIVE;
     if ((is_err = is_IO(cam_handle_, IS_IO_CMD_FLASH_SET_MODE,
         (void*) &nMode, sizeof(nMode))) != IS_SUCCESS) {
-      ERROR_STREAM("Could not set free-run active-low flash output for [" << cam_name_ <<
-        "] (" << err2str(is_err) << ")");
+      ERROR_STREAM("Could not set free-run active-low flash output for UEye camera '" <<
+          cam_name_ << "' (" << err2str(is_err) << ")");
       return is_err;
     }
 
     if ((is_err = is_EnableEvent(cam_handle_, IS_SET_EVENT_FRAME)) != IS_SUCCESS) {
-      ERROR_STREAM("Could not enable frame event for [" << cam_name_ <<
-        "] (" << err2str(is_err) << ")");
+      ERROR_STREAM("Could not enable frame event for UEye camera '" <<
+          cam_name_ << "' (" << err2str(is_err) << ")");
       return is_err;
     }
     if ((is_err = is_CaptureVideo(cam_handle_, IS_WAIT)) != IS_SUCCESS) {
-      ERROR_STREAM("Could not start free-run live video mode for [" << cam_name_ <<
-        "] (" << err2str(is_err) << ")");
+      ERROR_STREAM("Could not start free-run live video mode on UEye camera '" <<
+          cam_name_ << "' (" << err2str(is_err) << ")");
       return is_err;
     }
-    DEBUG_STREAM("Started live video mode for [" << cam_name_ << "]");
+    DEBUG_STREAM("Started live video mode on UEye camera '" + cam_name_ + "'");
   }
 
   return is_err;
-}
+};
 
 
 INT UEyeCamDriver::setExtTriggerMode() {
@@ -835,28 +808,26 @@ INT UEyeCamDriver::setExtTriggerMode() {
     setStandbyMode(); // No need to check for success
 
     if ((is_err = is_EnableEvent(cam_handle_, IS_SET_EVENT_FRAME)) != IS_SUCCESS) {
-      ERROR_STREAM("Could not enable frame event for [" << cam_name_ <<
-        "] (" << err2str(is_err) << ")");
+      ERROR_STREAM("Could not enable frame event for UEye camera '" <<
+          cam_name_ << "' (" << err2str(is_err) << ")");
       return is_err;
     }
 
     if ((is_err = is_SetExternalTrigger(cam_handle_, IS_SET_TRIGGER_HI_LO)) != IS_SUCCESS) {
-      ERROR_STREAM("Could not enable falling-edge external trigger mode for [" <<
-        cam_name_ << "] (" << err2str(is_err) << ")");
+      ERROR_STREAM("Could not enable falling-edge external trigger mode on UEye camera '" <<
+          cam_name_ << "' (" << err2str(is_err) << ")");
       return is_err;
     }
     if ((is_err = is_CaptureVideo(cam_handle_, IS_DONT_WAIT)) != IS_SUCCESS) {
-      ERROR_STREAM("Could not start external trigger live video mode for [" <<
-        cam_name_ << "] (" << err2str(is_err) << ")");
+      ERROR_STREAM("Could not start external trigger live video mode on UEye camera '" <<
+          cam_name_ << "' (" << err2str(is_err) << ")");
       return is_err;
     }
-    DEBUG_STREAM("Started falling-edge external trigger live video mode for [" <<
-      cam_name_ << "]");
+    DEBUG_STREAM("Started falling-edge external trigger live video mode on UEye camera '" + cam_name_ + "'");
   }
 
   return is_err;
-}
-
+};
 
 INT UEyeCamDriver::setMirrorUpsideDown(bool flip_horizontal){
   if (!isConnected()) return IS_INVALID_CAMERA_HANDLE;
@@ -870,7 +841,6 @@ INT UEyeCamDriver::setMirrorUpsideDown(bool flip_horizontal){
   return is_err;
 }
 
-
 INT UEyeCamDriver::setMirrorLeftRight(bool flip_vertical){
   if (!isConnected()) return IS_INVALID_CAMERA_HANDLE;
 
@@ -883,7 +853,6 @@ INT UEyeCamDriver::setMirrorLeftRight(bool flip_vertical){
   return is_err;
 }
 
-
 INT UEyeCamDriver::setStandbyMode() {
   if (!isConnected()) return IS_INVALID_CAMERA_HANDLE;
 
@@ -891,50 +860,50 @@ INT UEyeCamDriver::setStandbyMode() {
 
   if (extTriggerModeActive()) {
       if ((is_err = is_DisableEvent(cam_handle_, IS_SET_EVENT_FRAME)) != IS_SUCCESS) {
-        ERROR_STREAM("Could not disable frame event for [" << cam_name_ <<
-          "] (" << err2str(is_err) << ")");
+        ERROR_STREAM("Could not disable frame event for UEye camera '" <<
+            cam_name_ << "' (" << err2str(is_err) << ")");
         return is_err;
       }
       if ((is_err = is_SetExternalTrigger(cam_handle_, IS_SET_TRIGGER_OFF)) != IS_SUCCESS) {
-        ERROR_STREAM("Could not disable external trigger mode for [" << cam_name_ <<
-          "] (" << err2str(is_err) << ")");
+        ERROR_STREAM("Could not disable external trigger mode on UEye camera '" <<
+            cam_name_ << "' (" << err2str(is_err) << ")");
         return is_err;
       }
       is_SetExternalTrigger(cam_handle_, IS_GET_TRIGGER_STATUS); // documentation seems to suggest that this is needed to disable external trigger mode (to go into free-run mode)
       if ((is_err = is_StopLiveVideo(cam_handle_, IS_WAIT)) != IS_SUCCESS) {
-        ERROR_STREAM("Could not stop live video mode for [" << cam_name_ <<
-          "] (" << err2str(is_err) << ")");
+        ERROR_STREAM("Could not stop live video mode on UEye camera '" <<
+            cam_name_ << "' (" << err2str(is_err) << ")");
         return is_err;
       }
-      DEBUG_STREAM("Stopped external trigger mode for [" << cam_name_ << "]");
+      DEBUG_STREAM("Stopped external trigger mode on UEye camera '" + cam_name_ + "'");
   } else if (freeRunModeActive()) {
     UINT nMode = IO_FLASH_MODE_OFF;
     if ((is_err = is_IO(cam_handle_, IS_IO_CMD_FLASH_SET_MODE,
         (void*) &nMode, sizeof(nMode))) != IS_SUCCESS) {
-      ERROR_STREAM("Could not disable flash output for [" << cam_name_ <<
-        "] (" << err2str(is_err) << ")");
+      ERROR_STREAM("Could not disable flash output for UEye camera '" <<
+          cam_name_ << "' (" << err2str(is_err) << ")");
       return is_err;
     }
     if ((is_err = is_DisableEvent(cam_handle_, IS_SET_EVENT_FRAME)) != IS_SUCCESS) {
-      ERROR_STREAM("Could not disable frame event for [" << cam_name_ <<
-        "] (" << err2str(is_err) << ")");
+      ERROR_STREAM("Could not disable frame event for UEye camera '" <<
+          cam_name_ << "' (" << err2str(is_err) << ")");
       return is_err;
     }
     if ((is_err = is_StopLiveVideo(cam_handle_, IS_WAIT)) != IS_SUCCESS) {
-      ERROR_STREAM("Could not stop live video mode for [" << cam_name_ <<
-        "] (" << err2str(is_err) << ")");
+      ERROR_STREAM("Could not stop live video mode on UEye camera '" <<
+          cam_name_ << "' (" << err2str(is_err) << ")");
       return is_err;
     }
-    DEBUG_STREAM("Stopped free-run live video mode for [" << cam_name_ << "]");
+    DEBUG_STREAM("Stopped free-run live video mode on UEye camera '" + cam_name_ + "'");
   }
   if ((is_err = is_CameraStatus(cam_handle_, IS_STANDBY, IS_GET_STATUS)) != IS_SUCCESS) {
-    ERROR_STREAM("Could not set standby mode for [" << cam_name_ <<
-      "] (" << err2str(is_err) << ")");
+    ERROR_STREAM("Could not set standby mode for UEye camera '" <<
+        cam_name_ << "' (" << err2str(is_err) << ")");
     return is_err;
   }
 
   return is_err;
-}
+};
 
 
 const char* UEyeCamDriver::processNextFrame(INT timeout_ms) {
@@ -946,110 +915,18 @@ const char* UEyeCamDriver::processNextFrame(INT timeout_ms) {
   if ((is_err = is_WaitEvent(cam_handle_, IS_SET_EVENT_FRAME,
         timeout_ms)) != IS_SUCCESS) {
     if (is_err == IS_TIMED_OUT) {
-      ERROR_STREAM("Timed out while acquiring image from [" << cam_name_ <<
-        "] (" << err2str(is_err) << ")");
-      ERROR_STREAM("If this is occurring frequently, see https://github.com/anqixu/ueye_cam/issues/6#issuecomment-49925549");
+     // ERROR_STREAM("Timed out while acquiring image from UEye camera '" <<
+     //     cam_name_ << "' (" << err2str(is_err) << ")");
+     // ERROR_STREAM("If this is occurring frequently, see https://github.com/anqixu/ueye_cam/issues/6#issuecomment-49925549");
     } else {
-      ERROR_STREAM("Failed to acquire image from [" << cam_name_ <<
-        "] (" << err2str(is_err) << ")");
+      ERROR_STREAM("Failed to acquire image from UEye camera '" <<
+          cam_name_ << "' (" << err2str(is_err) << ")");
     }
     return NULL;
   }
 
   return cam_buffer_;
-}
-
-
-INT UEyeCamDriver::syncCamConfig(string dft_mode_str) {
-  INT is_err = IS_SUCCESS;
-
-  // Synchronize resolution, color mode, bits per pixel settings
-  if ((is_err = is_AOI(cam_handle_, IS_AOI_IMAGE_GET_AOI,
-      (void*) &cam_aoi_, sizeof(cam_aoi_))) != IS_SUCCESS) {
-    ERROR_STREAM("Could not retrieve Area Of Interest (AOI) information from [" <<
-      cam_name_ << "] (" << err2str(is_err) << ")");
-    return is_err;
-  }
-  INT colorMode = is_SetColorMode(cam_handle_, IS_GET_COLOR_MODE);
-  if (colorMode == IS_CM_BGR8_PACKED || colorMode == IS_CM_RGB8_PACKED) {
-    bits_per_pixel_ = 24;
-  } else if (colorMode == IS_CM_MONO8 || colorMode == IS_CM_SENSOR_RAW8) {
-    bits_per_pixel_ = 8;
-  } else {
-    WARN_STREAM("Current color mode (IDS format: " << colormode2str(colorMode) <<
-      ") for [" << cam_name_ << "] is not supported by this wrapper; " <<
-      "supported modes: {mono8 | bayer_rggb8 | rgb8 | bgr8}; " <<
-      "switching to default mode: " << dft_mode_str);
-    if ((is_err = setColorMode(dft_mode_str, false)) != IS_SUCCESS) return is_err;
-    // reallocate_buffer == false, since this fn will force-re-allocate anyways
-    colorMode = is_SetColorMode(cam_handle_, IS_GET_COLOR_MODE);
-  }
-  
-  // Synchronize sensor scaling rate setting
-  SENSORSCALERINFO sensorScalerInfo;
-  is_err = is_GetSensorScalerInfo(cam_handle_, &sensorScalerInfo, sizeof(sensorScalerInfo));
-  if (is_err == IS_NOT_SUPPORTED) {
-    cam_sensor_scaling_rate_ = 1.0;
-  } else if (is_err != IS_SUCCESS) {
-    ERROR_STREAM("Could not obtain supported internal image scaling information for [" <<
-      cam_name_ << "] (" << err2str(is_err) << ")");
-    return is_err;
-  } else {
-    cam_sensor_scaling_rate_ = sensorScalerInfo.dblCurrFactor;
-  }
-
-  // Synchronize subsampling rate setting
-  INT currSubsamplingRate = is_SetSubSampling(cam_handle_, IS_GET_SUBSAMPLING);
-  if (currSubsamplingRate == IS_SUBSAMPLING_DISABLE) { cam_subsampling_rate_ = 1; }
-  else if (currSubsamplingRate == IS_SUBSAMPLING_2X) { cam_subsampling_rate_ = 2; }
-  else if (currSubsamplingRate == IS_SUBSAMPLING_4X) { cam_subsampling_rate_ = 4; }
-  else if (currSubsamplingRate == IS_SUBSAMPLING_8X) { cam_subsampling_rate_ = 8; }
-  else if (currSubsamplingRate == IS_SUBSAMPLING_16X) { cam_subsampling_rate_ = 16; }
-  else {
-    WARN_STREAM("Current sampling rate (IDS setting: " << currSubsamplingRate <<
-      ") for [" << cam_name_ << "] is not supported by this wrapper; resetting to 1X");
-    if ((is_err = is_SetSubSampling(cam_handle_, IS_SUBSAMPLING_DISABLE)) != IS_SUCCESS) {
-      ERROR_STREAM("Could not set subsampling rate for [" << cam_name_ <<
-        "] to 1X (" << err2str(is_err) << ")");
-      return is_err;
-    }
-    cam_subsampling_rate_ = 1;
-  }
-  
-  // Synchronize binning rate setting
-  INT currBinningRate = is_SetBinning(cam_handle_, IS_GET_BINNING);
-  if (currBinningRate == IS_BINNING_DISABLE) { cam_binning_rate_ = 1; }
-  else if (currBinningRate == IS_BINNING_2X) { cam_binning_rate_ = 2; }
-  else if (currBinningRate == IS_BINNING_4X) { cam_binning_rate_ = 4; }
-  else if (currBinningRate == IS_BINNING_8X) { cam_binning_rate_ = 8; }
-  else if (currBinningRate == IS_BINNING_16X) { cam_binning_rate_ = 16; }
-  else {
-    WARN_STREAM("Current binning rate (IDS setting: " << currBinningRate <<
-      ") for [" << cam_name_ << "] is not supported by this wrapper; resetting to 1X");
-    if ((is_err = is_SetBinning(cam_handle_, IS_BINNING_DISABLE)) != IS_SUCCESS) {
-      ERROR_STREAM("Could not set binning rate for [" << cam_name_ <<
-        "] to 1X (" << err2str(is_err) << ")");
-      return is_err;
-    }
-    cam_binning_rate_ = 1;
-  }
-
-  // Report synchronized settings
-  DEBUG_STREAM("Synchronized configuration of [" << cam_name_ <<
-    "] and ensured compatibility with driver wrapper:" <<
-    "\n  AOI width: " << cam_aoi_.s32Width <<
-    "\n  AOI height: " << cam_aoi_.s32Height <<
-    "\n  AOI top-left X: " << cam_aoi_.s32X <<
-    "\n  AOI top-left Y: " << cam_aoi_.s32Y <<
-    "\n  IDS color mode: " << colormode2str(colorMode) <<
-    "\n  bits per pixel: " << bits_per_pixel_ <<
-    "\n  sensor scaling rate: " << cam_sensor_scaling_rate_ <<
-    "\n  subsampling rate: " << cam_subsampling_rate_ <<
-    "\n  binning rate: " << cam_binning_rate_);
-  
-  // Force (re-)allocate internal frame buffer
-  return reallocateCamBuffer();
-}
+};
 
 
 INT UEyeCamDriver::reallocateCamBuffer() {
@@ -1058,64 +935,40 @@ INT UEyeCamDriver::reallocateCamBuffer() {
   // Stop capture to prevent access to memory buffer
   setStandbyMode();
 
-  // Free existing memory from previous calls to reallocateCamBuffer()
   if (cam_buffer_ != NULL) {
     is_err = is_FreeImageMem(cam_handle_, cam_buffer_, cam_buffer_id_);
     cam_buffer_ = NULL;
   }
-  
-  // Query camera's current resolution settings, for redundancy
-  if ((is_err = is_AOI(cam_handle_, IS_AOI_IMAGE_GET_AOI,
-      (void*) &cam_aoi_, sizeof(cam_aoi_))) != IS_SUCCESS) {
-    ERROR_STREAM("Could not retrieve Area Of Interest (AOI) information for [" <<
-      cam_name_ << "] (" << err2str(is_err) << ")");
-    return is_err;
-  }
-
-  // Allocate new memory section for IDS driver to use as frame buffer
-  INT frameWidth = cam_aoi_.s32Width /
-    (cam_sensor_scaling_rate_ * cam_subsampling_rate_ * cam_binning_rate_);
-  INT frameHeight = cam_aoi_.s32Height /
-    (cam_sensor_scaling_rate_ * cam_subsampling_rate_ * cam_binning_rate_);
-  if ((is_err = is_AllocImageMem(cam_handle_, frameWidth, frameHeight,
+  if ((is_err = is_AllocImageMem(cam_handle_,
+      cam_aoi_.s32Width / (cam_sensor_scaling_rate_ * cam_subsampling_rate_ * cam_binning_rate_),
+      cam_aoi_.s32Height / (cam_sensor_scaling_rate_ * cam_subsampling_rate_ * cam_binning_rate_),
       bits_per_pixel_, &cam_buffer_, &cam_buffer_id_)) != IS_SUCCESS) {
-    ERROR_STREAM("Failed to allocate " << frameWidth << " x " << frameHeight <<
-      " image buffer for [" << cam_name_ << "]");
+    ERROR_STREAM("Failed to allocate " <<
+        cam_aoi_.s32Width / (cam_sensor_scaling_rate_ * cam_subsampling_rate_ * cam_binning_rate_) <<
+      " x " <<
+      cam_aoi_.s32Height / (cam_sensor_scaling_rate_ * cam_subsampling_rate_ * cam_binning_rate_) <<
+      " image buffer");
     return is_err;
   }
-  
-  // Tell IDS driver to use allocated memory section as frame buffer
   if ((is_err = is_SetImageMem(cam_handle_, cam_buffer_, cam_buffer_id_)) != IS_SUCCESS) {
-    ERROR_STREAM("Failed to associate image buffer to IDS driver for [" <<
-      cam_name_ << "] (" << err2str(is_err) << ")");
+    ERROR_STREAM("Failed to associate an image buffer to the UEye camera driver");
     return is_err;
   }
-  
-  // Synchronize internal settings for buffer step size and overall buffer size
-  // NOTE: assume that sensor_scaling_rate, subsampling_rate, and cam_binning_rate_
-  //       have all been previously validated and synchronized by syncCamConfig()
   if ((is_err = is_GetImageMemPitch(cam_handle_, &cam_buffer_pitch_)) != IS_SUCCESS) {
-    ERROR_STREAM("Failed to query buffer step size / pitch / stride for [" <<
-      cam_name_ << "] (" << err2str(is_err) << ")");
+    ERROR_STREAM("Failed to query UEye camera buffer's pitch (a.k.a. stride)");
     return is_err;
   }
-  if (cam_buffer_pitch_ < frameWidth) {
-    ERROR_STREAM("Frame buffer's queried step size (" << cam_buffer_pitch_ <<
-      ") is smaller than buffer's expected width (" << frameWidth << ") for [" << cam_name_ <<
-      "]\n(THIS IS A CODING ERROR, PLEASE CONTACT PACKAGE AUTHOR)");
-  }
-  cam_buffer_size_ = cam_buffer_pitch_ * frameHeight;
-
-  // Report updated settings
-  DEBUG_STREAM("Allocated internal memory for [" << cam_name_ << "]:" <<
-    "\n  buffer width: " << frameWidth <<
-    "\n  buffer height: " << frameHeight <<
-    "\n  buffer step/pitch/stride: " << cam_buffer_pitch_ <<
-    "\n  expected bits per pixel: " << bits_per_pixel_ <<
-    "\n  expected buffer size: " << cam_buffer_size_);
+  cam_buffer_size_ = cam_buffer_pitch_ * cam_aoi_.s32Height /
+      (cam_sensor_scaling_rate_ * cam_subsampling_rate_ * cam_binning_rate_);
+  DEBUG_STREAM("Allocate internal memory - width: " <<
+      cam_aoi_.s32Width / (cam_sensor_scaling_rate_ * cam_subsampling_rate_ * cam_binning_rate_) <<
+      "; height: " <<
+      cam_aoi_.s32Height / (cam_sensor_scaling_rate_ * cam_subsampling_rate_ * cam_binning_rate_) <<
+      "; fetched pitch: " << cam_buffer_pitch_ << "; expected bpp: " << bits_per_pixel_ <<
+      "; total size: " << cam_buffer_size_);
 
   return is_err;
-}
+};
 
 
 const char* UEyeCamDriver::err2str(INT error) {
@@ -1213,84 +1066,7 @@ const char* UEyeCamDriver::err2str(INT error) {
   }
   return "UNKNOWN ERROR";
 #undef CASE
-}
+};
 
 
-const char* UEyeCamDriver::colormode2str(INT mode) {
-#define CASE(s) case s: return #s; break
-  switch (mode) {
-  CASE(IS_CM_MONO16);
-  CASE(IS_CM_MONO12);
-  CASE(IS_CM_MONO10);
-  CASE(IS_CM_MONO8);
-  CASE(IS_CM_SENSOR_RAW16);
-  CASE(IS_CM_SENSOR_RAW12);
-  CASE(IS_CM_SENSOR_RAW10);
-  CASE(IS_CM_SENSOR_RAW8);
-  CASE(IS_CM_RGB12_UNPACKED);
-  CASE(IS_CM_RGB10_UNPACKED);
-  CASE(IS_CM_RGB10_PACKED);
-  CASE(IS_CM_RGB8_PACKED);
-  CASE(IS_CM_RGBA12_UNPACKED);
-  CASE(IS_CM_RGBA8_PACKED);
-  CASE(IS_CM_RGBY8_PACKED);
-  CASE(IS_CM_BGR12_UNPACKED);
-  CASE(IS_CM_BGR10_UNPACKED);
-  CASE(IS_CM_BGR10_PACKED);
-  CASE(IS_CM_BGR8_PACKED);
-  CASE(IS_CM_BGRA12_UNPACKED);
-  CASE(IS_CM_BGRA8_PACKED);
-  CASE(IS_CM_BGRY8_PACKED);
-  CASE(IS_CM_RGB8_PLANAR);
-  CASE(IS_CM_BGR565_PACKED);
-  CASE(IS_CM_BGR5_PACKED);
-  CASE(IS_CM_UYVY_PACKED);
-  CASE(IS_CM_CBYCRY_PACKED);
-  CASE(IS_CM_PREFER_PACKED_SOURCE_FORMAT);
-  CASE(IS_CM_JPEG);
-  // The following are obsolete formats according to
-  // https://en.ids-imaging.com/manuals/uEye_SDK/EN/uEye_Manual/index.html
-  // CASE(IS_SET_CM_RGB32);
-  // CASE(IS_SET_CM_RGB24);
-  // CASE(IS_SET_CM_RGB16);
-  // CASE(IS_SET_CM_RGB15);
-  // CASE(IS_SET_CM_Y8);
-  // CASE(IS_SET_CM_BAYER);
-  // CASE(IS_SET_CM_UYVY);
-  // CASE(IS_SET_CM_UYVY_MONO);
-  // CASE(IS_SET_CM_UYVY_BAYER);
-  // CASE(IS_SET_CM_CBYCRY);
-  // CASE(IS_SET_CM_RGBY);
-  // CASE(IS_SET_CM_RGB30);
-  // CASE(IS_SET_CM_Y12);
-  // CASE(IS_SET_CM_BAYER12);
-  // CASE(IS_SET_CM_Y16);
-  // CASE(IS_SET_CM_BAYER16);
-  // CASE(IS_CM_BGR10V2_PACKED);
-  // CASE(IS_CM_RGB10V2_PACKED);
-  // CASE(IS_CM_BGR555_PACKED);
-  // CASE(IS_CM_BAYER_RG8);
-  // CASE(IS_CM_BAYER_RG12);
-  // CASE(IS_CM_BAYER_RG16);
-  // CASE(IS_CM_RGB12_PACKED);
-  // CASE(IS_CM_RGBA12_PACKED);
-  // CASE(IS_CM_BGR12_PACKED);
-  // CASE(IS_CM_BGRA12_PACKED);
-  default:
-    return "UNKNOWN COLOR MODE";
-    break;
-  }
-  return "UNKNOWN COLOR MODE";
-#undef CASE
-}
-
-bool UEyeCamDriver::getTimestamp(UEYETIME *timestamp) {
-  UEYEIMAGEINFO ImageInfo;
-  if(is_GetImageInfo (cam_handle_, cam_buffer_id_, &ImageInfo, sizeof (ImageInfo)) == IS_SUCCESS) {
-    *timestamp = ImageInfo.TimestampSystem;
-    return true;
-  }
-  return false;
-}
-
-} // namespace ueye_cam
+}; // namespace ueye_cam

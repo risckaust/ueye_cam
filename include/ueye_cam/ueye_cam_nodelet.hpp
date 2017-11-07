@@ -15,7 +15,7 @@
 *
 * SOFTWARE LICENSE AGREEMENT (BSD LICENSE):
 *
-* Copyright (c) 2013, Anqi Xu
+* Copyright (c) 2013-2016, Anqi Xu and contributors
 * All rights reserved.
 *
 * Redistribution and use in source and binary forms, with or without
@@ -84,6 +84,7 @@ public:
   const static std::string DEFAULT_FRAME_NAME;
   const static std::string DEFAULT_CAMERA_NAME;
   const static std::string DEFAULT_CAMERA_TOPIC;
+  const static std::string DEFAULT_TIMEOUT_TOPIC;
   const static std::string DEFAULT_COLOR_MODE;
 
 
@@ -152,6 +153,26 @@ protected:
   void startFrameGrabber();
   void stopFrameGrabber();
 
+  const static std::map<INT, std::string> ENCODING_DICTIONARY;
+  /**
+   * Transfers the current frame content into given sensor_msgs::Image,
+   * therefore writes the fields width, height, encoding, step and
+   * data of img.
+   */
+  bool fillMsgData(sensor_msgs::Image& img) const;
+
+  /**
+   * Returns image's timestamp or current wall time if driver call fails.
+   */
+  ros::Time getImageTimestamp();
+
+  /**
+   * Returns image's timestamp based on device's internal clock or current wall time if driver call fails.
+   */
+  ros::Time getImageTickTimestamp();
+
+  virtual void handleTimeout();
+
   std::thread frame_grab_thread_;
   bool frame_grab_alive_;
 
@@ -163,14 +184,24 @@ protected:
   sensor_msgs::Image ros_image_;
   sensor_msgs::CameraInfo ros_cam_info_;
   unsigned int ros_frame_count_;
+  ros::Publisher timeout_pub_;
+  unsigned long long int timeout_count_;
 
   ros::ServiceServer set_cam_info_srv_;
 
   std::string frame_name_;
   std::string cam_topic_;
+  std::string timeout_topic_;
   std::string cam_intr_filename_;
   std::string cam_params_filename_; // should be valid UEye INI file
   ueye_cam::UEyeCamConfig cam_params_;
+
+  ros::Time init_ros_time_; // for processing frames
+  uint64_t init_clock_tick_;
+
+  ros::Time init_publish_time_; // for throttling frames from being published (see cfg.output_rate)
+  uint64_t prev_output_frame_idx_; // see init_publish_time_
+  boost::mutex output_rate_mutex_;
 };
 
 

@@ -15,7 +15,7 @@
 *
 * SOFTWARE LICENSE AGREEMENT (BSD LICENSE):
 *
-* Copyright (c) 2013, Anqi Xu
+* Copyright (c) 2013-2016, Anqi Xu and contributors
 * All rights reserved.
 *
 * Redistribution and use in source and binary forms, with or without
@@ -54,7 +54,9 @@ using namespace std;
 namespace ueye_cam {
 
 
-UEyeCamDriver::UEyeCamDriver(int cam_ID, string cam_name) :
+// Note that all of these default settings will be overwritten
+// by syncCamConfig() during connectCam()
+UEyeCamDriver::UEyeCamDriver(int cam_ID, string cam_name):
     cam_handle_((HIDS) 0),
     cam_buffer_(NULL),
     cam_buffer_id_(0),
@@ -65,6 +67,7 @@ UEyeCamDriver::UEyeCamDriver(int cam_ID, string cam_name) :
     cam_subsampling_rate_(1),
     cam_binning_rate_(1),
     cam_sensor_scaling_rate_(1),
+    color_mode_(IS_CM_MONO8),
     bits_per_pixel_(8) {
   cam_aoi_.s32X = 0;
   cam_aoi_.s32Y = 0;
@@ -127,9 +130,17 @@ INT UEyeCamDriver::connectCam(int new_cam_ID) {
 
   // Fetch sensor parameters
   is_err = is_GetSensorInfo(cam_handle_, &cam_sensor_info_);
+  if (is_err != IS_SUCCESS) {
+    ERROR_STREAM("Could not poll sensor information for [" << cam_name_ <<
+      "] (" << err2str(is_err) << ")");
+    return is_err;
+  }
 
-  // Initialize local camera frame buffer
-  reallocateCamBuffer();
+  // Validate camera's configuration to ensure compatibility with driver wrapper
+  // (note that this function also initializes the internal frame buffer)
+  if ((is_err = syncCamConfig()) != IS_SUCCESS) return is_err;
+
+  DEBUG_STREAM("Connected to [" + cam_name_ + "]");
 
   return is_err;
 };
@@ -199,7 +210,7 @@ INT UEyeCamDriver::loadCamConfig(string filename) {
 };
 
 
-INT UEyeCamDriver::setColorMode(string mode, bool reallocate_buffer) {
+INT UEyeCamDriver::setColorMode(string& mode, bool reallocate_buffer) {
   if (!isConnected()) return IS_INVALID_CAMERA_HANDLE;
 
   INT is_err = IS_SUCCESS;
@@ -208,25 +219,27 @@ INT UEyeCamDriver::setColorMode(string mode, bool reallocate_buffer) {
   setStandbyMode();
 
   // Set to specified color mode
-  if (mode == "rgb8") {
-    if ((is_err = is_SetColorMode(cam_handle_, IS_CM_RGB8_PACKED)) != IS_SUCCESS) {
-      ERROR_STREAM("Could not set color mode to RGB8 (" << err2str(is_err) << ")");
-      return is_err;
-    }
-    bits_per_pixel_ = 24;
-  } else if (mode == "bayer_rggb8") {
-    if ((is_err = is_SetColorMode(cam_handle_, IS_CM_SENSOR_RAW8)) != IS_SUCCESS) {
-      ERROR_STREAM("Could not set color mode to BAYER_RGGB8 (" << err2str(is_err) << ")");
-      return is_err;
-    }
-    bits_per_pixel_ = 8;
-  } else { // Default to MONO8
-    if ((is_err = is_SetColorMode(cam_handle_, IS_CM_MONO8)) != IS_SUCCESS) {
-      ERROR_STREAM("Could not set color mode to MONO8 (" << err2str(is_err) << ")");
-      return is_err;
-    }
-    bits_per_pixel_ = 8;
+  color_mode_ = name2colormode(mode);
+  if (!isSupportedColorMode(color_mode_)) {
+    WARN_STREAM("Could not set color mode of [" << cam_name_
+        << "] to " << mode << " (not supported by this wrapper). "
+        << "switching to default mode: mono8");
+    color_mode_ = IS_CM_MONO8;
+    mode = "mono8";
   }
+  if ((is_err = is_SetColorMode(cam_handle_, color_mode_)) != IS_SUCCESS) {
+    ERROR_STREAM("Could not set color mode of [" << cam_name_ <<
+        "] to " << mode << " (" << err2str(is_err) << ": " << color_mode_ << " / '" << mode << "'). switching to default mode: mono8");
+        
+    color_mode_ = IS_CM_MONO8;
+    mode = "mono8";
+    if ((is_err = is_SetColorMode(cam_handle_, color_mode_)) != IS_SUCCESS) {
+      ERROR_STREAM("Could not set color mode of [" << cam_name_ <<
+          "] to " << mode << " (" << err2str(is_err) << ": " << color_mode_ << "/ " << mode << ")");
+      return is_err;
+    }
+  }
+  bits_per_pixel_ = colormode2bpp(color_mode_);
 
   DEBUG_STREAM("Updated color mode to " << mode);
 
@@ -264,6 +277,13 @@ INT UEyeCamDriver::setResolution(INT& image_width, INT& image_height,
       (cam_sensor_info_.nMaxHeight - image_height) / 2 : image_top;
   cam_aoi_.s32Width = image_width;
   cam_aoi_.s32Height = image_height;
+
+  const double s = cam_binning_rate_*cam_subsampling_rate_*cam_sensor_scaling_rate_;
+  cam_aoi_.s32X /= s;
+  cam_aoi_.s32Y /= s;
+  cam_aoi_.s32Width /= s;
+  cam_aoi_.s32Height /= s;
+
   if ((is_err = is_AOI(cam_handle_, IS_AOI_IMAGE_SET_AOI, &cam_aoi_, sizeof(cam_aoi_))) != IS_SUCCESS) {
     ERROR_STREAM("Failed to set UEye camera sensor's Area Of Interest to " <<
       image_width << " x " << image_height <<
@@ -777,9 +797,9 @@ INT UEyeCamDriver::setFreeRunMode() {
     UINT nMode = IO_FLASH_MODE_FREERUN_HI_ACTIVE;
     if ((is_err = is_IO(cam_handle_, IS_IO_CMD_FLASH_SET_MODE,
         (void*) &nMode, sizeof(nMode))) != IS_SUCCESS) {
-      ERROR_STREAM("Could not set free-run active-low flash output for UEye camera '" <<
-          cam_name_ << "' (" << err2str(is_err) << ")");
-      return is_err;
+      WARN_STREAM("Could not set free-run active-low flash output for [" << cam_name_ <<
+        "] (" << err2str(is_err) << ")");
+      WARN_STREAM("WARNING: camera hardware does not support ueye_cam's master-slave synchronization method");
     }
 
     if ((is_err = is_EnableEvent(cam_handle_, IS_SET_EVENT_FRAME)) != IS_SUCCESS) {
@@ -915,9 +935,10 @@ const char* UEyeCamDriver::processNextFrame(INT timeout_ms) {
   if ((is_err = is_WaitEvent(cam_handle_, IS_SET_EVENT_FRAME,
         timeout_ms)) != IS_SUCCESS) {
     if (is_err == IS_TIMED_OUT) {
-     // ERROR_STREAM("Timed out while acquiring image from UEye camera '" <<
-     //     cam_name_ << "' (" << err2str(is_err) << ")");
-     // ERROR_STREAM("If this is occurring frequently, see https://github.com/anqixu/ueye_cam/issues/6#issuecomment-49925549");
+      ERROR_STREAM("Timed out while acquiring image from [" << cam_name_ <<
+        "] (" << err2str(is_err) << ")");
+      ERROR_STREAM("If this is occurring frequently, see https://github.com/anqixu/ueye_cam/issues/6#issuecomment-49925549");
+      handleTimeout();
     } else {
       ERROR_STREAM("Failed to acquire image from UEye camera '" <<
           cam_name_ << "' (" << err2str(is_err) << ")");
@@ -926,7 +947,97 @@ const char* UEyeCamDriver::processNextFrame(INT timeout_ms) {
   }
 
   return cam_buffer_;
-};
+}
+
+
+INT UEyeCamDriver::syncCamConfig(string dft_mode_str) {
+  INT is_err = IS_SUCCESS;
+
+  // Synchronize resolution, color mode, bits per pixel settings
+  if ((is_err = is_AOI(cam_handle_, IS_AOI_IMAGE_GET_AOI,
+      (void*) &cam_aoi_, sizeof(cam_aoi_))) != IS_SUCCESS) {
+    ERROR_STREAM("Could not retrieve Area Of Interest (AOI) information from [" <<
+      cam_name_ << "] (" << err2str(is_err) << ")");
+    return is_err;
+  }
+  color_mode_ = is_SetColorMode(cam_handle_, IS_GET_COLOR_MODE);
+  if (!isSupportedColorMode(color_mode_)) {
+    WARN_STREAM("Current color mode (IDS format: " << colormode2str(color_mode_)
+        << ") for [" << cam_name_ << "] is not supported by this wrapper; "
+        //<< "supported modes: {mono8 | mono10 | mono12 | mono16 | bayer_rggb8 | rgb8 | bgr8 | rgb10 | bgr10 | rgb10u | bgr10u | rgb12u | bgr12u}; "
+        << "switching to default mode: " << dft_mode_str);
+    if ((is_err = setColorMode(dft_mode_str, false)) != IS_SUCCESS) return is_err;
+    // reallocate_buffer == false, since this fn will force-re-allocate anyways
+  }
+  bits_per_pixel_ = colormode2bpp(color_mode_);
+
+  // Synchronize sensor scaling rate setting
+  SENSORSCALERINFO sensorScalerInfo;
+  is_err = is_GetSensorScalerInfo(cam_handle_, &sensorScalerInfo, sizeof(sensorScalerInfo));
+  if (is_err == IS_NOT_SUPPORTED) {
+    cam_sensor_scaling_rate_ = 1.0;
+  } else if (is_err != IS_SUCCESS) {
+    ERROR_STREAM("Could not obtain supported internal image scaling information for [" <<
+      cam_name_ << "] (" << err2str(is_err) << ")");
+    return is_err;
+  } else {
+    cam_sensor_scaling_rate_ = sensorScalerInfo.dblCurrFactor;
+  }
+
+  // Synchronize subsampling rate setting
+  const INT currSubsamplingRate = is_SetSubSampling(cam_handle_, IS_GET_SUBSAMPLING);
+  switch (currSubsamplingRate) {
+    case (IS_SUBSAMPLING_DISABLE): cam_subsampling_rate_ = 1; break;
+    case (IS_SUBSAMPLING_2X): cam_subsampling_rate_ = 2; break;
+    case (IS_SUBSAMPLING_4X): cam_subsampling_rate_ = 4; break;
+    case (IS_SUBSAMPLING_8X): cam_subsampling_rate_ = 8; break;
+    case (IS_SUBSAMPLING_16X): cam_subsampling_rate_ = 16; break;
+    default:
+      WARN_STREAM("Current sampling rate (IDS setting: " << currSubsamplingRate
+          << ") for [" << cam_name_ << "] is not supported by this wrapper; resetting to 1X");
+      if ((is_err = is_SetSubSampling(cam_handle_, IS_SUBSAMPLING_DISABLE)) != IS_SUCCESS) {
+        ERROR_STREAM("Could not set subsampling rate for [" << cam_name_
+            << "] to 1X (" << err2str(is_err) << ")");
+        return is_err;
+      }
+      cam_subsampling_rate_ = 1; break;
+  }
+
+  // Synchronize binning rate setting
+  const INT currBinningRate = is_SetBinning(cam_handle_, IS_GET_BINNING);
+  switch (currBinningRate) {
+    case (IS_BINNING_DISABLE): cam_binning_rate_ = 1; break;
+    case (IS_BINNING_2X): cam_binning_rate_ = 2; break;
+    case (IS_BINNING_4X): cam_binning_rate_ = 4; break;
+    case (IS_BINNING_8X): cam_binning_rate_ = 8; break;
+    case (IS_BINNING_16X): cam_binning_rate_ = 16; break;
+    default:
+      WARN_STREAM("Current binning rate (IDS setting: " << currBinningRate
+          << ") for [" << cam_name_ << "] is not supported by this wrapper; resetting to 1X");
+      if ((is_err = is_SetBinning(cam_handle_, IS_BINNING_DISABLE)) != IS_SUCCESS) {
+        ERROR_STREAM("Could not set binning rate for [" << cam_name_
+            << "] to 1X (" << err2str(is_err) << ")");
+        return is_err;
+      }
+      cam_binning_rate_ = 1; break;
+  }
+
+  // Report synchronized settings
+  DEBUG_STREAM("Synchronized configuration of [" << cam_name_ <<
+    "] and ensured compatibility with driver wrapper:" <<
+    "\n  AOI width: " << cam_aoi_.s32Width <<
+    "\n  AOI height: " << cam_aoi_.s32Height <<
+    "\n  AOI top-left X: " << cam_aoi_.s32X <<
+    "\n  AOI top-left Y: " << cam_aoi_.s32Y <<
+    "\n  IDS color mode: " << colormode2str(color_mode_) <<
+    "\n  bits per pixel: " << bits_per_pixel_ <<
+    "\n  sensor scaling rate: " << cam_sensor_scaling_rate_ <<
+    "\n  subsampling rate: " << cam_subsampling_rate_ <<
+    "\n  binning rate: " << cam_binning_rate_);
+
+  // Force (re-)allocate internal frame buffer
+  return reallocateCamBuffer();
+}
 
 
 INT UEyeCamDriver::reallocateCamBuffer() {
@@ -939,33 +1050,50 @@ INT UEyeCamDriver::reallocateCamBuffer() {
     is_err = is_FreeImageMem(cam_handle_, cam_buffer_, cam_buffer_id_);
     cam_buffer_ = NULL;
   }
-  if ((is_err = is_AllocImageMem(cam_handle_,
-      cam_aoi_.s32Width / (cam_sensor_scaling_rate_ * cam_subsampling_rate_ * cam_binning_rate_),
-      cam_aoi_.s32Height / (cam_sensor_scaling_rate_ * cam_subsampling_rate_ * cam_binning_rate_),
-      bits_per_pixel_, &cam_buffer_, &cam_buffer_id_)) != IS_SUCCESS) {
-    ERROR_STREAM("Failed to allocate " <<
-        cam_aoi_.s32Width / (cam_sensor_scaling_rate_ * cam_subsampling_rate_ * cam_binning_rate_) <<
-      " x " <<
-      cam_aoi_.s32Height / (cam_sensor_scaling_rate_ * cam_subsampling_rate_ * cam_binning_rate_) <<
-      " image buffer");
+
+  // Query camera's current resolution settings, for redundancy
+  if ((is_err = is_AOI(cam_handle_, IS_AOI_IMAGE_GET_AOI,
+      (void*) &cam_aoi_, sizeof(cam_aoi_))) != IS_SUCCESS) {
+    ERROR_STREAM("Could not retrieve Area Of Interest (AOI) information for [" <<
+      cam_name_ << "] (" << err2str(is_err) << ")");
     return is_err;
   }
+
+  // Allocate new memory section for IDS driver to use as frame buffer
+  if ((is_err = is_AllocImageMem(cam_handle_, cam_aoi_.s32Width, cam_aoi_.s32Height,
+      bits_per_pixel_, &cam_buffer_, &cam_buffer_id_)) != IS_SUCCESS) {
+    ERROR_STREAM("Failed to allocate " << cam_aoi_.s32Width << " x " << cam_aoi_.s32Height <<
+      " image buffer for [" << cam_name_ << "]");
+    return is_err;
+  }
+
+  // Tell IDS driver to use allocated memory section as frame buffer
   if ((is_err = is_SetImageMem(cam_handle_, cam_buffer_, cam_buffer_id_)) != IS_SUCCESS) {
     ERROR_STREAM("Failed to associate an image buffer to the UEye camera driver");
     return is_err;
   }
+
+  // Synchronize internal settings for buffer step size and overall buffer size
+  // NOTE: assume that sensor_scaling_rate, subsampling_rate, and cam_binning_rate_
+  //       have all been previously validated and synchronized by syncCamConfig()
   if ((is_err = is_GetImageMemPitch(cam_handle_, &cam_buffer_pitch_)) != IS_SUCCESS) {
     ERROR_STREAM("Failed to query UEye camera buffer's pitch (a.k.a. stride)");
     return is_err;
   }
-  cam_buffer_size_ = cam_buffer_pitch_ * cam_aoi_.s32Height /
-      (cam_sensor_scaling_rate_ * cam_subsampling_rate_ * cam_binning_rate_);
-  DEBUG_STREAM("Allocate internal memory - width: " <<
-      cam_aoi_.s32Width / (cam_sensor_scaling_rate_ * cam_subsampling_rate_ * cam_binning_rate_) <<
-      "; height: " <<
-      cam_aoi_.s32Height / (cam_sensor_scaling_rate_ * cam_subsampling_rate_ * cam_binning_rate_) <<
-      "; fetched pitch: " << cam_buffer_pitch_ << "; expected bpp: " << bits_per_pixel_ <<
-      "; total size: " << cam_buffer_size_);
+  if (cam_buffer_pitch_ < cam_aoi_.s32Width * bits_per_pixel_/8) {
+    ERROR_STREAM("Frame buffer's queried step size (" << cam_buffer_pitch_ <<
+      ") is smaller than buffer's expected stride [= width (" << cam_aoi_.s32Width << ") * bits per pixel (" << bits_per_pixel_ << ") /8] for [" << cam_name_ <<
+      "]\n(THIS IS A CODING ERROR, PLEASE CONTACT PACKAGE AUTHOR)");
+  }
+  cam_buffer_size_ = cam_buffer_pitch_ * cam_aoi_.s32Height;
+
+  // Report updated settings
+  DEBUG_STREAM("Allocated internal memory for [" << cam_name_ << "]:" <<
+    "\n  buffer width: " << cam_aoi_.s32Width <<
+    "\n  buffer height: " << cam_aoi_.s32Height <<
+    "\n  buffer step/pitch/stride: " << cam_buffer_pitch_ <<
+    "\n  expected bits per pixel: " << bits_per_pixel_ <<
+    "\n  expected buffer size: " << cam_buffer_size_);
 
   return is_err;
 };
@@ -1068,5 +1196,230 @@ const char* UEyeCamDriver::err2str(INT error) {
 #undef CASE
 };
 
+const INT UEyeCamDriver::colormode2bpp(INT mode) {
+  switch (mode) {
+    case IS_CM_SENSOR_RAW8:
+    case IS_CM_MONO8:
+      return 8;
+    case IS_CM_SENSOR_RAW10:
+    case IS_CM_SENSOR_RAW12:
+    case IS_CM_SENSOR_RAW16:
+    case IS_CM_MONO10:
+    case IS_CM_MONO12:
+    case IS_CM_MONO16:
+    case IS_CM_BGR5_PACKED:
+    case IS_CM_BGR565_PACKED:
+    case IS_CM_UYVY_PACKED:
+    case IS_CM_UYVY_MONO_PACKED:
+    case IS_CM_UYVY_BAYER_PACKED:
+    case IS_CM_CBYCRY_PACKED:
+      return 16;
+    case IS_CM_RGB8_PACKED:
+    case IS_CM_BGR8_PACKED:
+    case IS_CM_RGB8_PLANAR:
+      return 24;
+    case IS_CM_RGBA8_PACKED:
+    case IS_CM_BGRA8_PACKED:
+    case IS_CM_RGBY8_PACKED:
+    case IS_CM_BGRY8_PACKED:
+    case IS_CM_RGB10_PACKED:
+    case IS_CM_BGR10_PACKED:
+      return 32;
+    case IS_CM_RGB10_UNPACKED:
+    case IS_CM_BGR10_UNPACKED:
+    case IS_CM_RGB12_UNPACKED:
+    case IS_CM_BGR12_UNPACKED:
+      return 48;
+    case IS_CM_RGBA12_UNPACKED:
+    case IS_CM_BGRA12_UNPACKED:
+      return 64;
+//   case IS_CM_JPEG:
+    default:
+      return 0;
+  }
+}
 
-}; // namespace ueye_cam
+
+const bool UEyeCamDriver::isSupportedColorMode(INT mode) {
+  switch (mode) {
+    case IS_CM_SENSOR_RAW8:
+    case IS_CM_SENSOR_RAW10:
+    case IS_CM_SENSOR_RAW12:
+    case IS_CM_SENSOR_RAW16:
+    case IS_CM_MONO8:
+    case IS_CM_MONO10:
+    case IS_CM_MONO12:
+    case IS_CM_MONO16:
+    case IS_CM_RGB8_PACKED:
+    case IS_CM_BGR8_PACKED:
+    case IS_CM_RGB8_PLANAR:
+    case IS_CM_RGB10_PACKED:
+    case IS_CM_BGR10_PACKED:
+    case IS_CM_RGB10_UNPACKED:
+    case IS_CM_BGR10_UNPACKED:
+    case IS_CM_RGB12_UNPACKED:
+    case IS_CM_BGR12_UNPACKED:
+      return true;
+//    case IS_CM_BGR5_PACKED:
+//    case IS_CM_BGR565_PACKED:
+//    case IS_CM_UYVY_PACKED:
+//    case IS_CM_UYVY_MONO_PACKED:
+//    case IS_CM_UYVY_BAYER_PACKED:
+//    case IS_CM_CBYCRY_PACKED:
+//    case IS_CM_RGBA8_PACKED:
+//    case IS_CM_BGRA8_PACKED:
+//    case IS_CM_RGBY8_PACKED:
+//    case IS_CM_BGRY8_PACKED:
+//    case IS_CM_RGBA12_UNPACKED:
+//    case IS_CM_BGRA12_UNPACKED:
+//    case IS_CM_JPEG:
+    default:
+      return false;
+  }
+}
+
+
+const std::map<std::string, INT> UEyeCamDriver::COLOR_DICTIONARY = {
+    { "bayer_rggb8", IS_CM_SENSOR_RAW8 },
+    { "bayer_rggb10", IS_CM_SENSOR_RAW10 },
+    { "bayer_rggb12", IS_CM_SENSOR_RAW12 },
+    { "bayer_rggb16", IS_CM_SENSOR_RAW16 },
+    { "mono8", IS_CM_MONO8 },
+    { "mono10", IS_CM_MONO10 },
+    { "mono12", IS_CM_MONO12 },
+    { "mono16", IS_CM_MONO16 },
+    { "rgb8", IS_CM_RGB8_PACKED },
+    { "bgr8", IS_CM_BGR8_PACKED },
+    { "rgb10", IS_CM_RGB10_PACKED },
+    { "bgr10", IS_CM_BGR10_PACKED },
+    { "rgb10u", IS_CM_RGB10_UNPACKED },
+    { "bgr10u", IS_CM_BGR10_UNPACKED },
+    { "rgb12u", IS_CM_RGB12_UNPACKED },
+    { "bgr12u", IS_CM_BGR12_UNPACKED }
+};
+
+
+const INT UEyeCamDriver::name2colormode(const std::string& name) {
+  const std::map<std::string, INT>::const_iterator iter = COLOR_DICTIONARY.find(name);
+  if (iter!=COLOR_DICTIONARY.end()) {
+    return iter->second;
+  }
+  else {
+    return 0;
+  }
+}
+
+
+const std::string UEyeCamDriver::colormode2name(INT mode) {
+  for (const std::pair<std::string, INT>& value: COLOR_DICTIONARY) {
+    if (value.second == mode) {
+      return value.first;
+    }
+  }
+  return std::string();
+}
+
+
+const std::function<void*(void*, void*, size_t)> UEyeCamDriver::getUnpackCopyFunc(INT color_mode) {
+  switch (color_mode) {
+    case IS_CM_RGB10_PACKED:
+    case IS_CM_BGR10_PACKED:
+      return unpackRGB10;
+    case IS_CM_SENSOR_RAW10:
+    case IS_CM_MONO10:
+    case IS_CM_RGB10_UNPACKED:
+    case IS_CM_BGR10_UNPACKED:
+      return unpack10u;
+    case IS_CM_SENSOR_RAW12:
+    case IS_CM_MONO12:
+    case IS_CM_RGB12_UNPACKED:
+    case IS_CM_BGR12_UNPACKED:
+      return unpack12u;
+    default:
+      return memcpy;
+  }
+}
+
+
+void* UEyeCamDriver::unpackRGB10(void* dst, void* src, size_t num) {
+  // UEye Driver 4.80.2 Linux 64 bit:
+  // pixel format seems to be
+  // 00BBBBBB BBBBGGGG GGGGGGRR RRRRRRRR
+  // instead of documented
+  // RRRRRRRR RRGGGGGG GGGGBBBB BBBBBB00
+
+  uint32_t pixel;
+  uint32_t* from = static_cast<uint32_t*>(src);
+  uint16_t* to = static_cast<uint16_t*>(dst);
+  // unpack a whole pixels per iteration
+  for (size_t i=0; i<num/4; ++i) {
+    pixel = (*from);
+    to[0] = pixel;
+    to[0] <<= 6;
+    pixel >>= 4;
+    to[1] = pixel;
+    to[1] &= 0b1111111111000000;
+    pixel >>= 10;
+    to[2] = pixel;
+    to[2] &= 0b1111111111000000;
+    to+=3;
+    ++from;
+  }
+  return dst;
+}
+
+
+void* UEyeCamDriver::unpack10u(void* dst, void* src, size_t num) {
+  // UEye Driver 4.80.2 Linux 64 bit:
+  // pixel format seems to be
+  // 000000CC CCCCCCCC
+  // instead of documented
+  // CCCCCCCC CC000000
+  uint16_t* from = static_cast<uint16_t*>(src);
+  uint16_t* to = static_cast<uint16_t*>(dst);
+  // unpack one color per iteration
+  for (size_t i=0; i<num/2; ++i) {
+    to[i] = from[i];
+    to[i] <<= 6;
+  }
+  return dst;
+}
+
+
+void* UEyeCamDriver::unpack12u(void* dst, void* src, size_t num) {
+  // UEye Driver 4.80.2 Linux 64 bit:
+  // pixel format seems to be
+  // 0000CCCC CCCCCCCC
+  // instead of documented
+  // CCCCCCCC CCCC0000
+  uint16_t* from = static_cast<uint16_t*>(src);
+  uint16_t* to = static_cast<uint16_t*>(dst);
+  // unpack one color per iteration
+  for (size_t i=0; i<num/2; ++i) {
+    to[i] = from[i];
+    to[i] <<= 4;
+  }
+  return dst;
+}
+
+
+bool UEyeCamDriver::getTimestamp(UEYETIME *timestamp) {
+  UEYEIMAGEINFO ImageInfo;
+  if(is_GetImageInfo (cam_handle_, cam_buffer_id_, &ImageInfo, sizeof (ImageInfo)) == IS_SUCCESS) {
+    *timestamp = ImageInfo.TimestampSystem;
+    return true;
+  }
+  return false;
+}
+
+
+bool UEyeCamDriver::getClockTick(uint64_t *tick) {
+  UEYEIMAGEINFO ImageInfo;
+  if(is_GetImageInfo (cam_handle_, cam_buffer_id_, &ImageInfo, sizeof (ImageInfo)) == IS_SUCCESS) {
+    *tick = ImageInfo.u64TimestampDevice;
+    return true;
+  }
+  return false;
+}
+
+} // namespace ueye_cam

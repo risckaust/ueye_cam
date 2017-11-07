@@ -15,7 +15,7 @@
 *
 * SOFTWARE LICENSE AGREEMENT (BSD LICENSE):
 *
-* Copyright (c) 2013, Anqi Xu
+* Copyright (c) 2013-2016, Anqi Xu and contributors
 * All rights reserved.
 *
 * Redistribution and use in source and binary forms, with or without
@@ -52,6 +52,7 @@
 #include <uEye.h>
 #include <string>
 #include <thread>
+#include <functional>
 #include "logging_macros.hpp"
 
 
@@ -124,7 +125,7 @@ public:
    * internal frame buffer. This function will stop live capture
    * automatically if necessary.
    *
-   * \param mode Color mode string. Valid values: {"rgb8", "mono8", "bayer_rggb8"}.
+   * \param mode Color mode string. Valid values: see UEyeCamDriver::COLOR_DICTIONARY
    *   Certain values may not be available for a given camera model.
    * \param reallocate_buffer Whether to auto-reallocate buffer or not after
    *   changing parameter. If set to false, remember to reallocate_buffer
@@ -132,7 +133,7 @@ public:
    *
    * \return IS_SUCCESS if successful, error flag otherwise (see err2str).
    */
-  INT setColorMode(std::string mode, bool reallocate_buffer = true);
+  INT setColorMode(std::string& mode, bool reallocate_buffer = true);
 
   /**
    * Updates current camera handle's sensor resolution and area of interest.
@@ -374,9 +375,86 @@ public:
    */
   const static char* err2str(INT error);
 
+  /**
+   * Stringifies UEye color mode flag.
+   */
+  const static char* colormode2str(INT mode);
+
+  /**
+   * translates UEye color mode flag to target ROS image encoding.
+   */
+  const static std::string colormode2img_enc(INT mode);
+
+  /**
+   *  bits per pixel attribute of UEye color mode flag
+   */
+  const static INT colormode2bpp(INT mode);
+
+  /**
+   *  check if this driver supports the chosen UEye color mode
+   */
+  const static bool isSupportedColorMode(INT mode);
+
+  /**
+   * translates ROS name to UEye color mode flag or the other way round.
+   */
+  const static INT name2colormode(const std::string& name);
+  const static std::string colormode2name(INT mode);
+
+  /**
+   * returns the proper transfer function to translate and copy the camera format
+   * pixel buffer either into an 8 or 16 bit unsigned int per channel format.
+   */
+  const static std::function<void*(void*, void*, size_t)> getUnpackCopyFunc(INT color_mode);
+  static void* unpackRGB10(void* dst, void* src, size_t num);
+  static void* unpack10u(void* dst, void* src, size_t num);
+  static void* unpack12u(void* dst, void* src, size_t num);
+
+  /**
+   * Sets a timestamp indicating the moment of the image capture
+   */
+  bool getTimestamp(UEYETIME *timestamp);
+
+  /**
+   * Sets a clock tick indicating the moment of the image capture
+   */
+  bool getClockTick(uint64_t *tick);
+
 
 protected:
+  /**
+   * Queries current camera handle's configuration (color mode,
+   * (area of interest / resolution, sensor scaling rate, subsampling rate,
+   * binning rate) to synchronize with this class's internal member values,
+   * then force-updates to default settings if current ones are not supported
+   * by this driver wrapper (ueye_cam), and finally force (re-)allocates
+   * internal frame buffer.
+   * 
+   * This function is intended to be called internally, after opening a camera handle
+   * (in connectCam()) or after loading a UEye camera configuration file
+   * (in loadCamConfig()), where the camera may be already operating with a
+   * non-supported setting.
+   * 
+   * \param dft_mode_str: default color mode to switch to, if current color mode
+   *   is not supported by this driver wrapper. Valid values: {"rgb8", "bgr8", "mono8", "bayer_rggb8"}
+   * 
+   * \return IS_SUCCESS if successful, error flag otherwise (see err2str).
+   */
+  virtual INT syncCamConfig(std::string dft_mode_str = "mono8");
+
+
+  virtual void handleTimeout() {};
+
+
+  /**
+   * (Re-)allocates internal frame buffer after querying current
+   * area of interest (resolution), and configures IDS driver to use this buffer.
+   * 
+   * \return IS_SUCCESS if successful, error flag otherwise (see err2str).
+   */
   INT reallocateCamBuffer();
+
+  const static std::map<std::string, INT> COLOR_DICTIONARY;
 
   HIDS cam_handle_;
   SENSORINFO cam_sensor_info_;
@@ -390,6 +468,7 @@ protected:
   unsigned int cam_subsampling_rate_;
   unsigned int cam_binning_rate_;
   double cam_sensor_scaling_rate_;
+  INT color_mode_;
   INT bits_per_pixel_;
 };
 

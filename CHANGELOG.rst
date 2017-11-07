@@ -2,6 +2,43 @@
 Changelog for package ueye_cam
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
+1.0.16 (2017-01-02)
+-------------------
+* fixed crash on camera reconnect
+* Contributors: Anqi Xu, Christopher Wecht
+
+1.0.15 (2016-08-25)
+-------------------
+* recover + update from failure in setColorMode
+* extended color modes (10, 12, 16 bit per channel)
+* added timeout topic for better debugging of frame timeouts
+* Contributors: Anqi Xu, Dominik Klein
+
+1.0.14 (2016-05-26)
+-------------------
+* now attempting to link against 32-bit ARMHF IDS libs on ARM64 arch
+* added capability to detect ARM64 processor (aarch64)
+* added separate rates for polling frames vs publishing images 
+* fixed buffersize for subsampling and increased maximum image size availible via rqt
+* added Travis CI config
+* Contributors: Anqi Xu, Eddy, Isaac I.Y. Saito, francois
+
+1.0.13 (2016-05-13)
+-------------------
+* Change timestamp source based on issue https://github.com/anqixu/ueye_cam/issues/37
+* changed 'failure to set active-low flash' from error to warning
+* Fixed typo in Gain for dynamic reconfigure parameters
+* Updated pixel_clock cap in dyncfg settings
+* Added check_ueye_api to confirm availability of IDS SDK at runtime
+* Contributors: Anqi Xu, Anup, Aris Synodinos, Kei Okada
+
+1.0.12 (2015-09-28)
+-------------------
+* fixed binning IS_INVALID_BUFFER_SIZE bug
+* Modified nodelet to use camera timestamp instead of wall clock time
+* Fix for new upstream dir name on ARM
+* Contributors: Alejandro Merello, Anqi Xu, Scott K Logan
+
 1.0.11 (2015-08-17)
 -------------------
 * updated barebones IDS drivers to 4.61

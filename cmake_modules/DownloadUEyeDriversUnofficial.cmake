@@ -22,8 +22,10 @@ function(download_ueye_drivers UEYE_LIBRARY_VAR UEYE_INCLUDE_DIR_VAR UEYE_DRIVER
     target_architecture(UEYE_ARCH)
     if (UEYE_ARCH STREQUAL "x86_64")
       set (UEYE_ARCH "amd64")
-    elseif (UEYE_ARCH STREQUAL "armv7")
+    elseif ((UEYE_ARCH STREQUAL "armv5") OR (UEYE_ARCH STREQUAL "armv6") OR (UEYE_ARCH STREQUAL "armv7"))
       set (UEYE_ARCH "arm")
+    elseif (UEYE_ARCH STREQUAL "aarch64")
+      set (UEYE_ARCH "arm64")
     endif ()
     
     # Set download path (credits due to ueye ROS package developers)
@@ -39,6 +41,7 @@ function(download_ueye_drivers UEYE_LIBRARY_VAR UEYE_INCLUDE_DIR_VAR UEYE_DRIVER
       set (UEYE_DRIVER_MD5 0297e76450084ab21ff9db1a3070f323)
     else ()
       message(FATAL_ERROR "The system's architecture, ${UEYE_ARCH}, is not supported currently by IDS / this ROS package.")
+      message(FATAL_ERROR "Internal debugging: CMAKE_SYSTEM_PROCESSOR=${CMAKE_SYSTEM_PROCESSOR}, CMAKE_SYSTEM_NAME=${CMAKE_SYSTEM_NAME}")
     endif()
     
     # Download and unpack drivers locally

@@ -118,7 +118,7 @@ public:
    *
    * \return IS_SUCCESS if successful, error flag otherwise (see err2str).
    */
-  INT loadCamConfig(std::string filename);
+  INT loadCamConfig(std::string filename, bool ignore_load_failure = true);
 
   /**
    * Updates current camera handle's color mode and re-initializes

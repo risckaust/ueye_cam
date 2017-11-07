@@ -146,6 +146,7 @@ INT UEyeCamDriver::connectCam(int new_cam_ID) {
 };
 
 
+
 INT UEyeCamDriver::disconnectCam() {
   INT is_err = IS_SUCCESS;
 
@@ -162,14 +163,14 @@ INT UEyeCamDriver::disconnectCam() {
     is_err = is_ExitCamera(cam_handle_);
     cam_handle_ = (HIDS) 0;
 
-    DEBUG_STREAM("Disconnected UEye camera '" + cam_name_ + "'");
+    DEBUG_STREAM("Disconnected from [" + cam_name_ + "]");
   }
 
   return is_err;
-};
+}
 
 
-INT UEyeCamDriver::loadCamConfig(string filename) {
+INT UEyeCamDriver::loadCamConfig(string filename, bool ignore_load_failure) {
   if (!isConnected()) return IS_INVALID_CAMERA_HANDLE;
 
   INT is_err = IS_SUCCESS;
@@ -178,36 +179,22 @@ INT UEyeCamDriver::loadCamConfig(string filename) {
   const wstring filenameU(filename.begin(), filename.end());
   if ((is_err = is_ParameterSet(cam_handle_, IS_PARAMETERSET_CMD_LOAD_FILE,
       (void*) filenameU.c_str(), 0)) != IS_SUCCESS) {
-    WARN_STREAM("Could not load UEye camera '" << cam_name_
-      << "' sensor parameters file " << filename << " (" << err2str(is_err) << ")");
+    WARN_STREAM("Could not load [" << cam_name_
+      << "]'s sensor parameters file " << filename << " (" << err2str(is_err) << ")");
+    if (ignore_load_failure) is_err = IS_SUCCESS;
     return is_err;
   } else {
-    // Update the AOI and bits per pixel
-    if ((is_err = is_AOI(cam_handle_, IS_AOI_IMAGE_GET_AOI,
-        (void*) &cam_aoi_, sizeof(cam_aoi_))) != IS_SUCCESS) {
-      ERROR_STREAM("Could not retrieve Area Of Interest from UEye camera '" <<
-          cam_name_ << "' (" << err2str(is_err) << ")");
-      return is_err;
-    }
-    INT colorMode = is_SetColorMode(cam_handle_, IS_GET_COLOR_MODE);
-    if (colorMode == IS_CM_BGR8_PACKED || colorMode == IS_CM_RGB8_PACKED) {
-      bits_per_pixel_ = 24;
-    } else if (colorMode == IS_CM_MONO8 || colorMode == IS_CM_SENSOR_RAW8) {
-      bits_per_pixel_ = 8;
-    } else {
-      WARN_STREAM("Current camera color mode is not supported by this wrapper;" <<
-          "supported modes: {MONO8 | RGB8 | BAYER_RGGB8}; switching to RGB8 (24-bit)");
-      if ((is_err = setColorMode("rgb8", false)) != IS_SUCCESS) return is_err;
-    }
+    // After loading configuration settings, need to re-ensure that camera's
+    // current configuration is supported by this driver wrapper
+    // (note that this function also initializes the internal frame buffer)
+    if ((is_err = syncCamConfig()) != IS_SUCCESS) return is_err;
 
-    reallocateCamBuffer();
-
-    DEBUG_STREAM("Successfully loaded UEye camera '" << cam_name_
-      << "'s sensor parameter file: " << filename);
+    DEBUG_STREAM("Successfully loaded sensor parameter file for [" << cam_name_ <<
+      "]: " << filename);
   }
 
   return is_err;
-};
+}
 
 
 INT UEyeCamDriver::setColorMode(string& mode, bool reallocate_buffer) {
@@ -241,10 +228,10 @@ INT UEyeCamDriver::setColorMode(string& mode, bool reallocate_buffer) {
   }
   bits_per_pixel_ = colormode2bpp(color_mode_);
 
-  DEBUG_STREAM("Updated color mode to " << mode);
+  DEBUG_STREAM("Updated color mode to " << mode << "for [" << cam_name_ << "]");
 
   return (reallocate_buffer ? reallocateCamBuffer() : IS_SUCCESS);
-};
+}
 
 
 INT UEyeCamDriver::setResolution(INT& image_width, INT& image_height,

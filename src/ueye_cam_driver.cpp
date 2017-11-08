@@ -51,7 +51,8 @@
 using namespace std;
 
 
-namespace ueye_cam {
+namespace ueye_cam
+{
 
 
 // Note that all of these default settings will be overwritten

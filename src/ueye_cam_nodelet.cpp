@@ -1564,6 +1564,7 @@ void UEyeCamNodelet::optimizeCaptureParams(const sensor_msgs::Image &frame)
 		double deadband = 0.4;
 		double adaptive_exposure_max_ = 25; //ms
 		double adaptive_exposure_min_ = 0.01;
+		double kp = 1.3;
 	
 		// Amount of change to the shutter speed or aperture value can be
 		// calculated directly from the histogram as the five regions
@@ -1573,12 +1574,10 @@ void UEyeCamNodelet::optimizeCaptureParams(const sensor_msgs::Image &frame)
 
 		// Calculate exposure durations
 		if ((msv > setpoint + deadband)) {	// overexposed
-			//adaptive_exposure_ms_ = 1/kP * (msv - setpoint);
-			adaptive_exposure_ms_ *= 0.5 * (msv - setpoint);
+			adaptive_exposure_ms_ *= (1/kp) * (msv - setpoint);
 
 		} else if ((msv < setpoint - deadband)) {	// underexposed
-			//adaptive_exposure_ms_ = kP * (setpoint - msv);
-			adaptive_exposure_ms_ *= 2 * (setpoint - msv);
+			adaptive_exposure_ms_ *= kp * (setpoint - msv);
 		}
 		
 		// limit exposure timing

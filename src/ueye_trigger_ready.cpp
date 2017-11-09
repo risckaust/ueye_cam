@@ -43,6 +43,11 @@ public:
 		return cam1_OK_;
 	}
 
+	void reset_cam()
+	{
+		cam0_OK_ = cam1_OK_ = false;
+	}
+
 	int enableTrigger()
 	{
 		srv_.request.cycle_time = (1000 / framerate_hz_);
@@ -105,26 +110,43 @@ int main(int argc, char **argv)
 	TriggerReady tr;
 	
 	ros::Rate r2(5); // Hz
-	
-	while (tr.disableTrigger() && ros::ok()) {
+	ros::Rate r(100); // Hz
+
+	// Send start trigger command to Pixhawk to echo the current timestamp
+	while (tr.enableTrigger() && ros::ok()) {
 		ROS_INFO_STREAM("Retrying reaching pixhawk");
 		r2.sleep();
 	}
+	ROS_INFO_STREAM("Started px4 triggering");
 	
-	// Define time update rate to call callback function if necessary
-	ros::Rate r(100); // Hz
-
+	// wait for camera acknowledge
 	//while (!(tr.cam0_OK() && tr.cam1_OK()) && ros::ok()) {
 	while (!tr.cam0_OK() && ros::ok()) {
 		ros::spinOnce();
 		r.sleep();
+	} 
+	tr.reset_cam();
+
+	// Send stop trigger command to Pixhawk to allow measuring the offset
+	while (tr.disableTrigger() && ros::ok()) {
+		ROS_INFO_STREAM("Retrying reaching pixhawk");
+		r2.sleep();
 	}
+	ROS_INFO_STREAM("Stopped px4 triggering to set the offset");
+	
+	// wait for camera acknowledge
+	//while (!(tr.cam0_OK() && tr.cam1_OK()) && ros::ok()) {
+	while (!tr.cam0_OK() && ros::ok()) {
+		ros::spinOnce();
+		r.sleep();
+	} 
+	tr.reset_cam();
 	
 	// Send start trigger command to Pixhawk
 	while (tr.enableTrigger() && ros::ok()) {
 		ROS_INFO_STREAM("Retrying reaching pixhawk");
 		r2.sleep();
 	}
-
+	ROS_INFO_STREAM("Restarted px4 triggering");
 }
 

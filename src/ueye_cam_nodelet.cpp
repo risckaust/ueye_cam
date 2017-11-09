@@ -172,23 +172,28 @@ void UEyeCamNodelet::onInit() {
 	
   ros_exposure_pub_ = nh.advertise<ueye_cam::Exposure>("master_exposure", 1);
 
-  ros_timestamp_sub_ = nh.subscribe("/mavros/cam_imu_sync/cam_imu_stamp", 1,
+  ros_timestamp_sub_ = nh.subscribe("mavros/cam_imu_sync/cam_imu_stamp", 1,
 					  &UEyeCamNodelet::bufferTimestamp, this);
   ros_exposure_sub_ = nh.subscribe("master_exposure", 1,
 					  &UEyeCamNodelet::setSlaveExposure, this);
   trigger_ready_srv_ = nh.serviceClient<std_srvs::Trigger>(cam_name_ + "/trigger_ready");
 
-  // Initiate camera and start capture
-  if (connectCam() != IS_SUCCESS) {
-    NODELET_ERROR_STREAM("Failed to initialize UEye camera '" << cam_name_ << "'");
-    return;
-  }
+	// Initiate camera and start capture
+	if (connectCam() != IS_SUCCESS) {
+		NODELET_ERROR_STREAM("Failed to initialize UEye camera '" << cam_name_ << "'");
+		return;
+	}
+	if (setStandbyMode() != IS_SUCCESS) {
+		NODELET_ERROR_STREAM("Shutting down UEye camera interface at initialization...");
+		ros::shutdown();
+		return;
+	}
+	NODELET_INFO_STREAM("Camera " << cam_name_ << " Initialised at standby mode");
 
   ros_cfg_->setCallback(f); // this will call configCallback, which will configure the camera's parameters
-  startFrameGrabber();
 
   // Start IMU-camera trigger
-  sendTriggerReady();
+  startFrameGrabber();
 
   NODELET_INFO_STREAM(
       "UEye camera '" << cam_name_ << "' initialized on topic " << ros_cam_pub_.getTopic() << endl <<
@@ -942,23 +947,16 @@ void UEyeCamNodelet::frameGrabLoop() {
 
   ros::Rate idleDelay(200);
 
-  int prevNumSubscribers = 0;
-  int currNumSubscribers = 0;
-  bool do_imu_sync_monitor = cam_params_.do_imu_sync;
-  while (frame_grab_alive_ && ros::ok()) {
-    // check if do_imu_sync flag was changed on the go
-    if (do_imu_sync_monitor != cam_params_.do_imu_sync) 
-	NODELET_ERROR_STREAM("do_imu_sync cannot be changed on the go. restart the camera!");
-    do_imu_sync_monitor = cam_params_.do_imu_sync;
-    // For IMU sync case: 
-    // Start streaming straight away!
-    if (cam_params_.do_imu_sync) {
+  // For IMU sync case: 
+  // Start capturing and set external trigger mode straight away!
+  if (cam_params_.do_imu_sync) {
 	// Reset reference time to prevent throttling first frame
       	output_rate_mutex_.lock();
       	init_publish_time_ = ros::Time(0);
       	prev_output_frame_idx_ = 0;
       	output_rate_mutex_.unlock();
 
+	cam_params_.ext_trigger_mode = 1; // force set ext_trigger_mode
       	if (cam_params_.ext_trigger_mode) {
         	if (setExtTriggerMode() != IS_SUCCESS) {
         		NODELET_ERROR_STREAM("Shutting down UEye camera interface...");
@@ -985,11 +983,23 @@ void UEyeCamNodelet::frameGrabLoop() {
 
        		INFO_STREAM("[" << cam_name_ << "] set to free-run mode");
 	}
-	
+	sendTriggerReady();
+  }
+
+  // Grabbing loop
+  int prevNumSubscribers = 0;
+  int currNumSubscribers = 0;
+  bool do_imu_sync_monitor = cam_params_.do_imu_sync;
+  while (frame_grab_alive_ && ros::ok()) {
+    // check if do_imu_sync flag was changed on the go
+    if (do_imu_sync_monitor != cam_params_.do_imu_sync) 
+	NODELET_ERROR_STREAM("do_imu_sync cannot be changed on the go. Restart the camera!");
+    do_imu_sync_monitor = cam_params_.do_imu_sync;
+
     // For normal operation withOUT imu sync
     // Initialize live video mode if camera was previously asleep, and ROS image topic has subscribers;
     // and stop live video mode if ROS image topic no longer has any subscribers
-    } else {
+    if (!cam_params_.do_imu_sync) {
     	currNumSubscribers = ros_cam_pub_.getNumSubscribers();
     	if (currNumSubscribers > 0 && prevNumSubscribers <= 0) {
       		// Reset reference time to prevent throttling first frame
@@ -1059,6 +1069,7 @@ void UEyeCamNodelet::frameGrabLoop() {
       INT eventTimeout = (cam_params_.auto_frame_rate || cam_params_.ext_trigger_mode) ?
           (INT) 2000 : (INT) (1000.0 / cam_params_.frame_rate * 2);
       if (processNextFrame(eventTimeout) != NULL) {
+      //if (1){
         // Initialize shared pointers from member messages for nodelet intraprocess publishing
         sensor_msgs::ImagePtr img_msg_ptr(new sensor_msgs::Image(ros_image_));
         sensor_msgs::CameraInfoPtr cam_info_msg_ptr(new sensor_msgs::CameraInfo(ros_cam_info_));
@@ -1361,7 +1372,7 @@ void UEyeCamNodelet::bufferTimestamp(const mavros_msgs::CamIMUStamp &msg)
 {
 	
 	timestamp_buffer_.push_back(msg);
-
+	//ROS_INFO("timestamp_buffer value: %u", ((uint)(timestamp_buffer_.end()-1)->frame_seq_id));
 	// Check whether buffer has stale stamp and if so throw away oldest
 	if (timestamp_buffer_.size() > 100) {
 		timestamp_buffer_.erase(timestamp_buffer_.begin());
@@ -1372,9 +1383,25 @@ void UEyeCamNodelet::bufferTimestamp(const mavros_msgs::CamIMUStamp &msg)
 
 void UEyeCamNodelet::sendTriggerReady()
 {
+	
+	acknTriggerCommander(); // call service: First ackn will STOP px4 triggering
 
+	// set stamp_buffer_offset_ from px4
+	ros::Duration(1).sleep(); // wait for timestamp callback from mavros
+	if (timestamp_buffer_.empty())
+		stamp_buffer_offset_ = 0;
+	else
+		stamp_buffer_offset_ = 1 + (uint)(timestamp_buffer_.end()-1)->frame_seq_id;
+	INFO_STREAM("Detected px4 starting stamp sequence is: " << stamp_buffer_offset_);
+
+	timestamp_buffer_.clear(); // timestamp_buffer_ should have some elements already from the feedback
+
+	acknTriggerCommander(); // call service: second ackn will RESTART px4 triggering
+};
+
+void UEyeCamNodelet::acknTriggerCommander()
+{
 	std_srvs::Trigger sig;
-
 	if (!trigger_ready_srv_.call(sig)) {
 		ROS_ERROR("Failed to call ready-for-trigger");
 	}
@@ -1399,6 +1426,7 @@ unsigned int UEyeCamNodelet::stampAndPublishImage(unsigned int index)
 {
 	int timestamp_index = findInStampBuffer(index);
 	if (timestamp_index) {
+
 		//ROS_INFO("found corresponding image from at index: %i", timestamp_index);
 		// Copy corresponding images and time stamps
 		sensor_msgs::Image image;
@@ -1407,7 +1435,7 @@ unsigned int UEyeCamNodelet::stampAndPublishImage(unsigned int index)
 		cinfo = cinfo_buffer_.at(index);
 
 		// Add half of exposure time to the actual trigger time
-		double timestamp = image.header.stamp.toSec() + timestamp_buffer_.at(timestamp_index).frame_stamp.toSec();
+		double timestamp = image.header.stamp.toSec() + timestamp_buffer_.at(index).frame_stamp.toSec();
 
 		image.header.stamp = ros::Time(timestamp);
 		cinfo.header = image.header;
@@ -1421,7 +1449,7 @@ unsigned int UEyeCamNodelet::stampAndPublishImage(unsigned int index)
 		// Erase published images and used timestamp from buffer
 		image_buffer_.erase(image_buffer_.begin() + index);
 		cinfo_buffer_.erase(cinfo_buffer_.begin() + index);
-		timestamp_buffer_.erase(timestamp_buffer_.begin() + timestamp_index);
+		timestamp_buffer_.erase(timestamp_buffer_.begin() + index);
 		return 0;
 
 	} else {
@@ -1432,15 +1460,15 @@ unsigned int UEyeCamNodelet::stampAndPublishImage(unsigned int index)
 unsigned int UEyeCamNodelet::findInStampBuffer(unsigned int index)
 {
 	// Check whether there is at least one image in image buffer
-	if (image_buffer_.size() < 1)
+	if (image_buffer_.empty())
 		return 0;
 
 	// Check whether image in image buffer with index "index" has corresponding element in timestamp buffer
 	unsigned int k = 0;
-
+	
 	while (k < timestamp_buffer_.size() && ros::ok()) {
-		if (image_buffer_.at(index).header.seq == (uint)timestamp_buffer_.at(k).frame_seq_id) {
-			INFO_STREAM("Found Match: image seq: " << image_buffer_.at(index).header.seq << ", buffer header seq: " << (uint)timestamp_buffer_.at(k).frame_seq_id);
+		if (image_buffer_.at(index).header.seq == ((uint)timestamp_buffer_.at(k).frame_seq_id - stamp_buffer_offset_)) {
+			INFO_STREAM("Found match! image seq: " << image_buffer_.at(index).header.seq << ", buffer header seq: " << ((uint)timestamp_buffer_.at(k).frame_seq_id - stamp_buffer_offset_));
 			return k;
 
 		} else {

@@ -160,6 +160,8 @@ protected:
 
   void sendTriggerReady();
 
+  void acknTriggerCommander();
+
   void sendSlaveExposure();
 
   /**
@@ -231,6 +233,8 @@ protected:
   sensor_msgs::Image ros_image_;
   sensor_msgs::CameraInfo ros_cam_info_;
   unsigned int ros_frame_count_;
+  unsigned int stamp_buffer_offset_;
+
   ros::Publisher timeout_pub_;
   unsigned long long int timeout_count_;
 

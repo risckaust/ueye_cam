@@ -118,6 +118,7 @@ UEyeCamNodelet::UEyeCamNodelet():
   cam_params_.flip_upd = false;
   cam_params_.flip_lr = false;
   cam_params_.do_imu_sync = true;
+  cam_params_.adaptive_exposure_mode_ = 2;
 };
 
 
@@ -225,7 +226,8 @@ void UEyeCamNodelet::onInit() {
       "Pixel Clock (MHz):\t" << cam_params_.pixel_clock << endl <<
       "Mirror Image Upside Down:\t" << cam_params_.flip_upd << endl <<
       "Mirror Image Left Right:\t" << cam_params_.flip_lr << endl <<
-      "Do camera px4 hardware sync:\t" << cam_params_.do_imu_sync << endl
+      "Do camera px4 hardware sync:\t" << cam_params_.do_imu_sync << endl <<
+      "Do adaptive exposure: \t" << cam_params_.adaptive_exposure_mode_ << endl
       );
 };
 
@@ -1369,7 +1371,7 @@ void UEyeCamNodelet::handleTimeout() {
 // For IMU sync
 void UEyeCamNodelet::setSlaveExposure(const ueye_cam::Exposure &msg)
 {
-	if(adaptive_exposure_mode_ == 1) { // accept exposure timing from master camera
+	if(cam_params_.adaptive_exposure_mode_ == 1) { // accept exposure timing from master camera
 		// TODO : re-add check for sequence again
 		adaptive_exposure_ms_ = msg.exposure_ms;
 		bool auto_exposure = false;
@@ -1423,7 +1425,7 @@ void UEyeCamNodelet::acknTriggerCommander()
 
 void UEyeCamNodelet::sendSlaveExposure()
 {
-	if(adaptive_exposure_mode_ == 2)
+	if(cam_params_.adaptive_exposure_mode_ == 2)
 	{
 		ueye_cam::Exposure msg;
 		msg.header.stamp = ros::Time::now();
@@ -1483,7 +1485,7 @@ int UEyeCamNodelet::findInStampBuffer(unsigned int index)
 	while (k < timestamp_buffer_.size() && ros::ok()) {
 		if (image_buffer_.at(index).header.seq == ((uint)timestamp_buffer_.at(k).frame_seq_id - stamp_buffer_offset_)) {
 			//INFO_STREAM("Found match! image seq: " << image_buffer_.at(index).header.seq 
-				//<< ", buffer header seq: " << ((uint)timestamp_buffer_.at(k).frame_seq_id - stamp_buffer_offset_));
+			//	<< ", buffer header seq: " << ((uint)timestamp_buffer_.at(k).frame_seq_id - stamp_buffer_offset_));
 			return k;
 
 		} else {
@@ -1521,7 +1523,7 @@ void UEyeCamNodelet::publishRectifiedImage(const sensor_msgs::Image &frame)
 void UEyeCamNodelet::optimizeCaptureParams(const sensor_msgs::Image &frame)
 {
 	
-	if(adaptive_exposure_mode_ == 2 && (ros_frame_count_ % 4 == 0) ) {
+	if(cam_params_.adaptive_exposure_mode_ == 2 && (ros_frame_count_ % 4 == 0) ) {
 	
 		cv_bridge::CvImagePtr cv_ptr;
 
@@ -1560,6 +1562,8 @@ void UEyeCamNodelet::optimizeCaptureParams(const sensor_msgs::Image &frame)
 		// TODO parameterize this 
 		double setpoint = 2.5;
 		double deadband = 0.4;
+		double adaptive_exposure_max_ = 25; //ms
+		double adaptive_exposure_min_ = 0.01;
 	
 		// Amount of change to the shutter speed or aperture value can be
 		// calculated directly from the histogram as the five regions

@@ -1482,7 +1482,7 @@ int UEyeCamNodelet::findInStampBuffer(unsigned int index)
 	
 	while (k < timestamp_buffer_.size() && ros::ok()) {
 		if (image_buffer_.at(index).header.seq == ((uint)timestamp_buffer_.at(k).frame_seq_id - stamp_buffer_offset_)) {
-			INFO_STREAM("Found match! image seq: " << image_buffer_.at(index).header.seq 
+			//INFO_STREAM("Found match! image seq: " << image_buffer_.at(index).header.seq 
 				<< ", buffer header seq: " << ((uint)timestamp_buffer_.at(k).frame_seq_id - stamp_buffer_offset_));
 			return k;
 

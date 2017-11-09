@@ -915,7 +915,10 @@ INT UEyeCamDriver::setStandbyMode() {
 
 
 const char* UEyeCamDriver::processNextFrame(INT timeout_ms) {
-  if (!freeRunModeActive() && !extTriggerModeActive()) return NULL;
+  if (!freeRunModeActive() && !extTriggerModeActive()) {
+	ERROR_STREAM("Ueye is not in freerun mode or exttrigger mode");
+	return NULL;
+  }
 
   INT is_err = IS_SUCCESS;
 

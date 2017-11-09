@@ -197,7 +197,7 @@ protected:
   
   // XXX descr
   unsigned int stampAndPublishImage(unsigned int index);
-  unsigned int findInStampBuffer(unsigned int index);
+  int findInStampBuffer(unsigned int index);
   
   /**
    * Image rectification

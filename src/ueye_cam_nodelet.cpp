@@ -990,7 +990,7 @@ void UEyeCamNodelet::frameGrabLoop() {
   int prevNumSubscribers = 0;
   int currNumSubscribers = 0;
   bool do_imu_sync_monitor = cam_params_.do_imu_sync;
-try{
+//try{
   while (frame_grab_alive_ && ros::ok()) {
     // check if do_imu_sync flag was changed on the go
     if (do_imu_sync_monitor != cam_params_.do_imu_sync) 
@@ -1176,20 +1176,19 @@ try{
 		optimizeCaptureParams(*img_msg_ptr);
 
 		// buffer the image frame and camera info
-		buffer_mutex_.lock();
 		image_buffer_.push_back(*img_msg_ptr);
 		cinfo_buffer_.push_back(*cam_info_msg_ptr);
-		buffer_mutex_.unlock();
-
+		
+		buffer_mutex_.lock();
 		if (image_buffer_.size() && timestamp_buffer_.size()) {
 			unsigned int i;
+			//INFO_STREAM("image_buffer_ size: " << image_buffer_.size() << 
+				//	", stamp_buffer_ size: " << timestamp_buffer_.size());
 			for (i = 0; i < image_buffer_.size() && timestamp_buffer_.size() > 0 ;) {
-				buffer_mutex_.lock();
 				i += stampAndPublishImage(i);
-				buffer_mutex_.unlock();
 			}
 		}
-		
+		buffer_mutex_.unlock();
 
 		// Check whether buffer has stale data and if so, throw away oldest
 		if (image_buffer_.size() > 100) {
@@ -1203,13 +1202,16 @@ try{
 	
 	// For non sync cases
 	} else {
-        	if (!fillMsgData(*img_msg_ptr)) continue;
+        	if (!fillMsgData(*img_msg_ptr)) {
+			ROS_INFO("Skip one image messge filled.");
+			continue;
+		}
 
         	img_msg_ptr->header.seq = cam_info_msg_ptr->header.seq = ros_frame_count_++;
         	img_msg_ptr->header.frame_id = cam_info_msg_ptr->header.frame_id;
 
         	if (!frame_grab_alive_ || !ros::ok()) break;
-
+		
         	ros_cam_pub_.publish(img_msg_ptr, cam_info_msg_ptr);
 	}
 
@@ -1223,9 +1225,9 @@ try{
     idleDelay.sleep();
   }
 
-} catch (int e) {
-    cout << "An exception occurred. Exception Nr. " << e << '\n';
-}
+//} catch (int e) {
+//    cout << "An exception occurred. Exception Nr. " << e << '\n';
+//}
   setStandbyMode();
   frame_grab_alive_ = false;
 
@@ -1406,7 +1408,7 @@ void UEyeCamNodelet::sendTriggerReady()
 		stamp_buffer_offset_ = 1 + (uint)(timestamp_buffer_.end()-1)->frame_seq_id;
 	INFO_STREAM("Detected px4 starting stamp sequence is: " << stamp_buffer_offset_);
 
-	timestamp_buffer_.clear(); // timestamp_buffer_ should have some elements already from the feedback
+	timestamp_buffer_.clear(); // timestamp_buffer_ should have some elements already from px4
 
 	acknTriggerCommander(); // call service: second ackn will RESTART px4 triggering
 };
@@ -1437,7 +1439,7 @@ void UEyeCamNodelet::sendSlaveExposure()
 unsigned int UEyeCamNodelet::stampAndPublishImage(unsigned int index)
 {
 	int timestamp_index = findInStampBuffer(index);
-	if (timestamp_index) {
+	if (timestamp_index+1) {
 
 		//ROS_INFO("found corresponding image from at index: %i", timestamp_index);
 		// Copy corresponding images and time stamps
@@ -1456,7 +1458,7 @@ unsigned int UEyeCamNodelet::stampAndPublishImage(unsigned int index)
 		ros_cam_pub_.publish(image, cinfo);
 		
 		// Publish rectified images
-		publishRectifiedImage(image);
+		//publishRectifiedImage(image);
 
 		// Erase published images and used timestamp from buffer
 		image_buffer_.erase(image_buffer_.begin() + index);
@@ -1469,18 +1471,19 @@ unsigned int UEyeCamNodelet::stampAndPublishImage(unsigned int index)
 	}
 };
 
-unsigned int UEyeCamNodelet::findInStampBuffer(unsigned int index)
+int UEyeCamNodelet::findInStampBuffer(unsigned int index)
 {
 	// Check whether there is at least one image in image buffer
 	if (image_buffer_.empty())
-		return 0;
+		return -1;
 
 	// Check whether image in image buffer with index "index" has corresponding element in timestamp buffer
 	unsigned int k = 0;
 	
 	while (k < timestamp_buffer_.size() && ros::ok()) {
 		if (image_buffer_.at(index).header.seq == ((uint)timestamp_buffer_.at(k).frame_seq_id - stamp_buffer_offset_)) {
-			INFO_STREAM("Found match! image seq: " << image_buffer_.at(index).header.seq << ", buffer header seq: " << ((uint)timestamp_buffer_.at(k).frame_seq_id - stamp_buffer_offset_));
+			INFO_STREAM("Found match! image seq: " << image_buffer_.at(index).header.seq 
+				<< ", buffer header seq: " << ((uint)timestamp_buffer_.at(k).frame_seq_id - stamp_buffer_offset_));
 			return k;
 
 		} else {
@@ -1489,7 +1492,7 @@ unsigned int UEyeCamNodelet::findInStampBuffer(unsigned int index)
 
 	}
 
-	return 0;
+	return -1;
 };
 
 void UEyeCamNodelet::publishRectifiedImage(const sensor_msgs::Image &frame)

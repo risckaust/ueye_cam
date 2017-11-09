@@ -245,6 +245,7 @@ protected:
   std::vector<sensor_msgs::Image> image_buffer_;
   std::vector<sensor_msgs::CameraInfo> cinfo_buffer_;
   std::vector<mavros_msgs::CamIMUStamp> timestamp_buffer_;
+  boost::mutex buffer_mutex_;
   
   ros::ServiceServer set_cam_info_srv_;
   ros::ServiceClient trigger_ready_srv_;

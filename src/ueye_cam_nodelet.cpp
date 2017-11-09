@@ -990,6 +990,7 @@ void UEyeCamNodelet::frameGrabLoop() {
   int prevNumSubscribers = 0;
   int currNumSubscribers = 0;
   bool do_imu_sync_monitor = cam_params_.do_imu_sync;
+try{
   while (frame_grab_alive_ && ros::ok()) {
     // check if do_imu_sync flag was changed on the go
     if (do_imu_sync_monitor != cam_params_.do_imu_sync) 
@@ -1175,15 +1176,20 @@ void UEyeCamNodelet::frameGrabLoop() {
 		optimizeCaptureParams(*img_msg_ptr);
 
 		// buffer the image frame and camera info
+		buffer_mutex_.lock();
 		image_buffer_.push_back(*img_msg_ptr);
 		cinfo_buffer_.push_back(*cam_info_msg_ptr);
+		buffer_mutex_.unlock();
 
 		if (image_buffer_.size() && timestamp_buffer_.size()) {
 			unsigned int i;
 			for (i = 0; i < image_buffer_.size() && timestamp_buffer_.size() > 0 ;) {
+				buffer_mutex_.lock();
 				i += stampAndPublishImage(i);
+				buffer_mutex_.unlock();
 			}
 		}
+		
 
 		// Check whether buffer has stale data and if so, throw away oldest
 		if (image_buffer_.size() > 100) {
@@ -1193,6 +1199,7 @@ void UEyeCamNodelet::frameGrabLoop() {
 
 		if (cinfo_buffer_.size() > 100) 
 			cinfo_buffer_.erase(cinfo_buffer_.begin());
+		
 	
 	// For non sync cases
 	} else {
@@ -1216,6 +1223,9 @@ void UEyeCamNodelet::frameGrabLoop() {
     idleDelay.sleep();
   }
 
+} catch (int e) {
+    cout << "An exception occurred. Exception Nr. " << e << '\n';
+}
   setStandbyMode();
   frame_grab_alive_ = false;
 
@@ -1370,15 +1380,17 @@ void UEyeCamNodelet::setSlaveExposure(const ueye_cam::Exposure &msg)
 
 void UEyeCamNodelet::bufferTimestamp(const mavros_msgs::CamIMUStamp &msg)
 {
-	
-	timestamp_buffer_.push_back(msg);
-	//ROS_INFO("timestamp_buffer value: %u", ((uint)(timestamp_buffer_.end()-1)->frame_seq_id));
-	// Check whether buffer has stale stamp and if so throw away oldest
-	if (timestamp_buffer_.size() > 100) {
-		timestamp_buffer_.erase(timestamp_buffer_.begin());
-		ROS_ERROR_THROTTLE(1, "Dropping timestamp");
+	if(cam_params_.do_imu_sync) {
+		buffer_mutex_.lock();
+		timestamp_buffer_.push_back(msg);
+		//ROS_INFO("timestamp_buffer value: %u", ((uint)(timestamp_buffer_.end()-1)->frame_seq_id));
+		// Check whether buffer has stale stamp and if so throw away oldest
+		if (timestamp_buffer_.size() > 100) {
+			timestamp_buffer_.erase(timestamp_buffer_.begin());
+			ROS_ERROR_THROTTLE(1, "Dropping timestamp");
+		}
+		buffer_mutex_.unlock();
 	}
-
 };
 
 void UEyeCamNodelet::sendTriggerReady()

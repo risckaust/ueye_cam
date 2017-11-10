@@ -1523,7 +1523,7 @@ void UEyeCamNodelet::publishRectifiedImage(const sensor_msgs::Image &frame)
 void UEyeCamNodelet::optimizeCaptureParams(const sensor_msgs::Image &frame)
 {
 	
-	if(cam_params_.adaptive_exposure_mode_ == 2 && (ros_frame_count_ % 4 == 0) ) {
+	if(cam_params_.adaptive_exposure_mode_ == 2 && (ros_frame_count_ % 5 == 0) ) {
 	
 		cv_bridge::CvImagePtr cv_ptr;
 
@@ -1562,9 +1562,9 @@ void UEyeCamNodelet::optimizeCaptureParams(const sensor_msgs::Image &frame)
 		// TODO parameterize this 
 		double setpoint = 2.5;
 		double deadband = 0.4;
-		double adaptive_exposure_max_ = 25; //ms
+		double adaptive_exposure_max_ = 20; //ms
 		double adaptive_exposure_min_ = 0.01;
-		double kp = 1.3;
+		double kp = 2.0;
 	
 		// Amount of change to the shutter speed or aperture value can be
 		// calculated directly from the histogram as the five regions

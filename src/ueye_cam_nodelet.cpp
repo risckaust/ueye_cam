@@ -1201,7 +1201,8 @@ void UEyeCamNodelet::frameGrabLoop() {
 		// Check whether buffer has stale data and if so, throw away oldest
 		if (image_buffer_.size() > 100) {
 			image_buffer_.erase(image_buffer_.begin());
-			ROS_ERROR_THROTTLE(1, "%i: Dropping image", cam_id_);
+			//ROS_ERROR_THROTTLE(1, "%i: Dropping image", cam_id_);
+			INFO_STREAM("Dropping half of the image buffer");
 		}
 
 		if (cinfo_buffer_.size() > 100) 
@@ -1396,8 +1397,9 @@ void UEyeCamNodelet::bufferTimestamp(const mavros_msgs::CamIMUStamp &msg)
 		//ROS_INFO("timestamp_buffer value: %u", ((uint)(timestamp_buffer_.end()-1)->frame_seq_id));
 		// Check whether buffer has stale stamp and if so throw away oldest
 		if (timestamp_buffer_.size() > 100) {
-			timestamp_buffer_.erase(timestamp_buffer_.begin());
-			ROS_ERROR_THROTTLE(1, "Dropping timestamp");
+			timestamp_buffer_.erase(timestamp_buffer_.begin(), timestamp_buffer_.begin()+50);
+			//ROS_ERROR_THROTTLE(1, "Dropping timestamp");
+			INFO_STREAM("Dropping half of the timestamp buffer.");
 		}
 		buffer_mutex_.unlock();
 	}
@@ -1456,8 +1458,10 @@ unsigned int UEyeCamNodelet::stampAndPublishImage(unsigned int index)
 		image = image_buffer_.at(index);
 		cinfo = cinfo_buffer_.at(index);
 
-		// Add half of exposure time to the actual trigger time
-		double timestamp = image.header.stamp.toSec() + timestamp_buffer_.at(index).frame_stamp.toSec();
+		// copy trigger time
+		//double timestamp = image.header.stamp.toSec() + timestamp_buffer_.at(timestamp_index).frame_stamp.toSec();
+		double timestamp = timestamp_buffer_.at(timestamp_index).frame_stamp.toSec();
+		//ERROR_STREAM(timestamp_buffer_.at(timestamp_index).frame_stamp.toSec());
 
 		image.header.stamp = ros::Time(timestamp);
 		cinfo.header = image.header;
@@ -1467,11 +1471,11 @@ unsigned int UEyeCamNodelet::stampAndPublishImage(unsigned int index)
 		
 		// Publish rectified images
 		//publishRectifiedImage(image);
-
+		//INFO_STREAM("image_buffer size: " << image_buffer_.size() << ", cinfo_buffer size: " << cinfo_buffer_.size() << ", timestamp_buffer size: " << timestamp_buffer_.size());
 		// Erase published images and used timestamp from buffer
 		image_buffer_.erase(image_buffer_.begin() + index);
 		cinfo_buffer_.erase(cinfo_buffer_.begin() + index);
-		timestamp_buffer_.erase(timestamp_buffer_.begin() + index);
+		timestamp_buffer_.erase(timestamp_buffer_.begin() + timestamp_index);
 		return 0;
 
 	} else {
@@ -1490,8 +1494,7 @@ int UEyeCamNodelet::findInStampBuffer(unsigned int index)
 	
 	while (k < timestamp_buffer_.size() && ros::ok()) {
 		if (image_buffer_.at(index).header.seq == ((uint)timestamp_buffer_.at(k).frame_seq_id - stamp_buffer_offset_)) {
-			//INFO_STREAM("Found match! image seq: " << image_buffer_.at(index).header.seq 
-			//	<< ", buffer header seq: " << ((uint)timestamp_buffer_.at(k).frame_seq_id - stamp_buffer_offset_));
+			//INFO_STREAM("Found match k=" << k << ", index=" << index << "! image seq: " << image_buffer_.at(index).header.seq << ", buffer header seq: " << ((uint)timestamp_buffer_.at(k).frame_seq_id - stamp_buffer_offset_));
 			return k;
 
 		} else {
@@ -1566,11 +1569,11 @@ void UEyeCamNodelet::optimizeCaptureParams(const sensor_msgs::Image &frame)
 		double msv = j / k;
 
 		// TODO parameterize this 
-		double setpoint = 2.5;
-		double deadband = 0.4;
-		double adaptive_exposure_max_ = 20; //ms
+		double setpoint = 2.0;
+		double deadband = 0.2;
+		double adaptive_exposure_max_ = 15; //ms
 		double adaptive_exposure_min_ = 0.01;
-		double kp = 2.0;
+		double kp = 1.5;
 	
 		// Amount of change to the shutter speed or aperture value can be
 		// calculated directly from the histogram as the five regions

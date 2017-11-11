@@ -1170,7 +1170,7 @@ void UEyeCamNodelet::frameGrabLoop() {
 			}
 
 			img_msg_ptr->step = expected_row_stride; // fix the row stepsize/stride value
-			output_rate_mutex_.lock();
+			output_rate_mutex_.unlock();
 		}
 
 		img_msg_ptr->header.seq = cam_info_msg_ptr->header.seq = ros_frame_count_++;
@@ -1185,7 +1185,7 @@ void UEyeCamNodelet::frameGrabLoop() {
 		output_rate_mutex_.lock();
 		image_buffer_.push_back(*img_msg_ptr);
 		cinfo_buffer_.push_back(*cam_info_msg_ptr);
-		output_rate_mutex_.lock();
+		output_rate_mutex_.unlock();
 		
 		buffer_mutex_.lock();
 		if (image_buffer_.size() && timestamp_buffer_.size()) {

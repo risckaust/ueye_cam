@@ -1152,12 +1152,15 @@ void UEyeCamNodelet::frameGrabLoop() {
 
 		} else if (cam_buffer_pitch_ == expected_row_stride) {
 			// Content is contiguous, so copy out the entire buffer
+			output_rate_mutex_.lock();
 			copy((char *) cam_buffer_,
 			((char *) cam_buffer_) + cam_buffer_size_,
 			img_msg_ptr->data.begin());
+			output_rate_mutex_.unlock();
 
 		} else { // cam_buffer_pitch_ > expected_row_stride
 			// Each row contains extra content according to cam_buffer_pitch_, so must copy out each row independently
+			output_rate_mutex_.lock();			
 			std::vector<unsigned char>::iterator ros_image_it = img_msg_ptr->data.begin();
 			char *cam_buffer_ptr = cam_buffer_;
 
@@ -1167,6 +1170,7 @@ void UEyeCamNodelet::frameGrabLoop() {
 			}
 
 			img_msg_ptr->step = expected_row_stride; // fix the row stepsize/stride value
+			output_rate_mutex_.lock();
 		}
 
 		img_msg_ptr->header.seq = cam_info_msg_ptr->header.seq = ros_frame_count_++;
@@ -1178,8 +1182,10 @@ void UEyeCamNodelet::frameGrabLoop() {
 		optimizeCaptureParams(*img_msg_ptr);
 
 		// buffer the image frame and camera info
+		output_rate_mutex_.lock();
 		image_buffer_.push_back(*img_msg_ptr);
 		cinfo_buffer_.push_back(*cam_info_msg_ptr);
+		output_rate_mutex_.lock();
 		
 		buffer_mutex_.lock();
 		if (image_buffer_.size() && timestamp_buffer_.size()) {

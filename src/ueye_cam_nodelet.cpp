@@ -229,6 +229,7 @@ void UEyeCamNodelet::onInit() {
       "Do camera px4 hardware sync:\t" << cam_params_.do_imu_sync << endl <<
       "Do adaptive exposure: \t" << cam_params_.adaptive_exposure_mode_ << endl
       );
+	adaptive_exposure_ms_ = 2.0;
 };
 
 
@@ -1416,9 +1417,11 @@ void UEyeCamNodelet::sendTriggerReady()
 		stamp_buffer_offset_ = 0;
 	else
 		stamp_buffer_offset_ = 1 + (uint)(timestamp_buffer_.end()-1)->frame_seq_id;
-	INFO_STREAM("Detected px4 starting stamp sequence is: " << stamp_buffer_offset_);
+	INFO_STREAM("Detected px4 starting stamp sequence will be: " << stamp_buffer_offset_);
 
 	timestamp_buffer_.clear(); // timestamp_buffer_ should have some elements already from px4
+	image_buffer_.clear();
+	ros_frame_count_ = 0;
 
 	acknTriggerCommander(); // call service: second ackn will RESTART px4 triggering
 };
@@ -1458,9 +1461,9 @@ unsigned int UEyeCamNodelet::stampAndPublishImage(unsigned int index)
 		image = image_buffer_.at(index);
 		cinfo = cinfo_buffer_.at(index);
 
-		// copy trigger time
-		//double timestamp = image.header.stamp.toSec() + timestamp_buffer_.at(timestamp_index).frame_stamp.toSec();
-		double timestamp = timestamp_buffer_.at(timestamp_index).frame_stamp.toSec();
+		// copy trigger time + half of the exposure time
+		double timestamp = timestamp_buffer_.at(timestamp_index).frame_stamp.toSec();// + (adaptive_exposure_ms_/2000.0);
+		//double timestamp = timestamp_buffer_.at(timestamp_index).frame_stamp.toSec();
 		//ERROR_STREAM(timestamp_buffer_.at(timestamp_index).frame_stamp.toSec());
 
 		image.header.stamp = ros::Time(timestamp);
@@ -1494,7 +1497,7 @@ int UEyeCamNodelet::findInStampBuffer(unsigned int index)
 	
 	while (k < timestamp_buffer_.size() && ros::ok()) {
 		if (image_buffer_.at(index).header.seq == ((uint)timestamp_buffer_.at(k).frame_seq_id - stamp_buffer_offset_)) {
-			//INFO_STREAM("Found match k=" << k << ", index=" << index << "! image seq: " << image_buffer_.at(index).header.seq << ", buffer header seq: " << ((uint)timestamp_buffer_.at(k).frame_seq_id - stamp_buffer_offset_));
+			//INFO_STREAM("Found match k=" << k << ", index=" << index << "! image seq: " << image_buffer_.at(index).header.seq << ", buffer header seq: " << ((uint)timestamp_buffer_.at(k).frame_seq_id));
 			return k;
 
 		} else {
@@ -1569,11 +1572,11 @@ void UEyeCamNodelet::optimizeCaptureParams(const sensor_msgs::Image &frame)
 		double msv = j / k;
 
 		// TODO parameterize this 
-		double setpoint = 2.0;
-		double deadband = 0.2;
+		double setpoint = 2.4;
+		double deadband = 0.1;
 		double adaptive_exposure_max_ = 15; //ms
 		double adaptive_exposure_min_ = 0.01;
-		double kp = 1.5;
+		double kp = 1.2;
 	
 		// Amount of change to the shutter speed or aperture value can be
 		// calculated directly from the histogram as the five regions

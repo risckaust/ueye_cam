@@ -1462,7 +1462,7 @@ unsigned int UEyeCamNodelet::stampAndPublishImage(unsigned int index)
 		cinfo = cinfo_buffer_.at(index);
 
 		// copy trigger time + half of the exposure time
-		double timestamp = timestamp_buffer_.at(timestamp_index).frame_stamp.toSec();// + (adaptive_exposure_ms_/2000.0);
+		double timestamp = timestamp_buffer_.at(timestamp_index).frame_stamp.toSec() + (adaptive_exposure_ms_/2000.0);
 		//double timestamp = timestamp_buffer_.at(timestamp_index).frame_stamp.toSec();
 		//ERROR_STREAM(timestamp_buffer_.at(timestamp_index).frame_stamp.toSec());
 

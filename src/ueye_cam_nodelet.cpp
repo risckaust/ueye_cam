@@ -1419,7 +1419,7 @@ void UEyeCamNodelet::sendTriggerReady()
 		stamp_buffer_offset_ = 1 + (uint)(timestamp_buffer_.end()-1)->frame_seq_id;
 	INFO_STREAM("Detected px4 starting stamp sequence will be: " << stamp_buffer_offset_);
 
-	timestamp_buffer_.clear(); // timestamp_buffer_ should have some elements already from px4
+	timestamp_buffer_.clear(); // timestamp_buffer_ should have some elements already from px4 since it is in a different thread.
 	image_buffer_.clear();
 	ros_frame_count_ = 0;
 
@@ -1574,7 +1574,8 @@ void UEyeCamNodelet::optimizeCaptureParams(const sensor_msgs::Image &frame)
 		// TODO parameterize this 
 		double setpoint = 2.4;
 		double deadband = 0.1;
-		double adaptive_exposure_max_ = 15; //ms
+		double expected_frame_rate = 30.0; // hz
+		double adaptive_exposure_max_ = 16.0; //ms, 1.0 / 30.0 * 1000.0 / 2.0 allow half of the trigger time interval to make sure not skipping frames, since there is readout time for image from ueye cam manual about half the capture time.
 		double adaptive_exposure_min_ = 0.01;
 		double kp = 1.2;
 	

@@ -1462,9 +1462,10 @@ unsigned int UEyeCamNodelet::stampAndPublishImage(unsigned int index)
 		cinfo = cinfo_buffer_.at(index);
 
 		// copy trigger time + half of the exposure time
-		double timestamp = timestamp_buffer_.at(timestamp_index).frame_stamp.toSec() + (adaptive_exposure_ms_/2000.0);
-		//double timestamp = timestamp_buffer_.at(timestamp_index).frame_stamp.toSec();
+		double timestamp = timestamp_buffer_.at(timestamp_index).frame_stamp.toSec() + (adaptive_exposure_ms_/1000.0);
+
 		//ERROR_STREAM(timestamp_buffer_.at(timestamp_index).frame_stamp.toSec());
+		INFO_STREAM("Image seq: " << image_buffer_.at(index).header.seq << " corresponds to " << "Timestamp seq: " << ((uint)timestamp_buffer_.at(timestamp_index).frame_seq_id));
 
 		image.header.stamp = ros::Time(timestamp);
 		cinfo.header = image.header;
@@ -1574,7 +1575,6 @@ void UEyeCamNodelet::optimizeCaptureParams(const sensor_msgs::Image &frame)
 		// TODO parameterize this 
 		double setpoint = 2.4;
 		double deadband = 0.1;
-		double expected_frame_rate = 30.0; // hz
 		double adaptive_exposure_max_ = 16.0; //ms, 1.0 / 30.0 * 1000.0 / 2.0 allow half of the trigger time interval to make sure not skipping frames, since there is readout time for image from ueye cam manual about half the capture time.
 		double adaptive_exposure_min_ = 0.01;
 		double kp = 1.2;

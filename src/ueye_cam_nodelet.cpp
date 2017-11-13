@@ -1070,10 +1070,10 @@ void UEyeCamNodelet::frameGrabLoop() {
 #endif
 
 //_____________________________
-// For capturing 
+// start capturing 
     if (isCapturing()) {
       INT eventTimeout = (cam_params_.auto_frame_rate || cam_params_.ext_trigger_mode) ?
-          (INT) 2000 : (INT) (1000.0 / cam_params_.frame_rate * 2);
+          (INT) 2000 : (INT) (1000.0 / cam_params_.frame_rate * 1.9); // tide strick timeout to avoid skipping frame. 
       if (processNextFrame(eventTimeout) != NULL) {
       //if (1){
         // Initialize shared pointers from member messages for nodelet intraprocess publishing
@@ -1469,7 +1469,7 @@ unsigned int UEyeCamNodelet::stampAndPublishImage(unsigned int index)
 		double timestamp = ros::Time(0).toSec() + timestamp_buffer_.at(timestamp_index).frame_stamp.toSec() + (adaptive_exposure_ms_/1000.0);
 
 		//ERROR_STREAM(timestamp_buffer_.at(timestamp_index).frame_stamp.toSec());
-		INFO_STREAM("Image seq: " << image_buffer_.at(index).header.seq << " corresponds to " << "Timestamp seq: " << ((uint)timestamp_buffer_.at(timestamp_index).frame_seq_id));
+		//INFO_STREAM("Image seq: " << image_buffer_.at(index).header.seq << " corresponds to " << "Timestamp seq: " << ((uint)timestamp_buffer_.at(timestamp_index).frame_seq_id));
 
 		image.header.stamp = ros::Time(timestamp);
 		cinfo.header = image.header;

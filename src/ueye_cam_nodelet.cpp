@@ -1069,6 +1069,8 @@ void UEyeCamNodelet::frameGrabLoop() {
     prevStartGrab = currStartGrab;
 #endif
 
+//_____________________________
+// For capturing 
     if (isCapturing()) {
       INT eventTimeout = (cam_params_.auto_frame_rate || cam_params_.ext_trigger_mode) ?
           (INT) 2000 : (INT) (1000.0 / cam_params_.frame_rate * 2);
@@ -1174,7 +1176,7 @@ void UEyeCamNodelet::frameGrabLoop() {
 			output_rate_mutex_.unlock();
 		}
 
-		img_msg_ptr->header.seq = cam_info_msg_ptr->header.seq = ros_frame_count_++;
+		img_msg_ptr->header.seq = cam_info_msg_ptr->header.seq = ros_frame_count_; ros_frame_count_++;
 		img_msg_ptr->header.frame_id = cam_info_msg_ptr->header.frame_id;
 
 		if (!frame_grab_alive_ || !ros::ok()) { break; }
@@ -1420,8 +1422,10 @@ void UEyeCamNodelet::sendTriggerReady()
 	INFO_STREAM("Detected px4 starting stamp sequence will be: " << stamp_buffer_offset_);
 
 	timestamp_buffer_.clear(); // timestamp_buffer_ should have some elements already from px4 since it is in a different thread.
-	image_buffer_.clear();
 	ros_frame_count_ = 0;
+	int i=0; 
+	while (processNextFrame(2000) != NULL) {i++;} // this should flush all the unused frame in the camera buffer
+	INFO_STREAM("Flashed " << i << " images from camera buffer prior to start!");
 
 	acknTriggerCommander(); // call service: second ackn will RESTART px4 triggering
 };
@@ -1462,7 +1466,7 @@ unsigned int UEyeCamNodelet::stampAndPublishImage(unsigned int index)
 		cinfo = cinfo_buffer_.at(index);
 
 		// copy trigger time + half of the exposure time
-		double timestamp = timestamp_buffer_.at(timestamp_index).frame_stamp.toSec() + (adaptive_exposure_ms_/1000.0);
+		double timestamp = ros::Time(0).toSec() + timestamp_buffer_.at(timestamp_index).frame_stamp.toSec() + (adaptive_exposure_ms_/1000.0);
 
 		//ERROR_STREAM(timestamp_buffer_.at(timestamp_index).frame_stamp.toSec());
 		INFO_STREAM("Image seq: " << image_buffer_.at(index).header.seq << " corresponds to " << "Timestamp seq: " << ((uint)timestamp_buffer_.at(timestamp_index).frame_seq_id));
@@ -1575,7 +1579,7 @@ void UEyeCamNodelet::optimizeCaptureParams(const sensor_msgs::Image &frame)
 		// TODO parameterize this 
 		double setpoint = 2.4;
 		double deadband = 0.1;
-		double adaptive_exposure_max_ = 16.0; //ms, 1.0 / 30.0 * 1000.0 / 2.0 allow half of the trigger time interval to make sure not skipping frames, since there is readout time for image from ueye cam manual about half the capture time.
+		double adaptive_exposure_max_ = 10.0; //ms, 1.0 / 30.0 * 1000.0 / 2.0 allow half of the trigger time interval to make sure not skipping frames, since there is readout time for image from ueye cam manual.
 		double adaptive_exposure_min_ = 0.01;
 		double kp = 1.2;
 	

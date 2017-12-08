@@ -116,6 +116,13 @@ target_link_libraries(trigger_commander
   ${catkin_LIBRARIES}
 )
 
+add_executable(trigger_commander_stereo
+  src/ueye_trigger_ready_stereo.cpp
+)
+target_link_libraries(trigger_commander_stereo
+  ${catkin_LIBRARIES}
+)
+
 add_executable(check_ueye_api src/check_ueye_api.cpp)
 target_link_libraries(check_ueye_api ${catkin_LIBRARIES} ${UEYECAM_LIB_NAME})
 

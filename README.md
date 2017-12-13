@@ -13,6 +13,7 @@ This repo is the developed based on the merge of https://github.com/anqixu/ueye_
 It is aimming to enable updated version of the Ueye camera driver, with the capability of hardware syncronisation with px4 through mavros (default enabled). It also has adaptive exposure control to opimise the exposure setting for slam in realtime while avoid over exposure to clash with the sync signal. It remains the capabilities of auto standby mode with external trigger.
 
 px4 setup:
+
     1.GPIO trigger mode
 
     2.TRIG_INTERVAL: 33.33 ms

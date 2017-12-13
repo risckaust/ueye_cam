@@ -1181,8 +1181,6 @@ void UEyeCamNodelet::frameGrabLoop() {
 
 		if (!frame_grab_alive_ || !ros::ok()) { break; }
 
-		// compute optimal params for next image frame
-		optimizeCaptureParams(*img_msg_ptr);
 
 		// buffer the image frame and camera info
 		output_rate_mutex_.lock();
@@ -1226,6 +1224,9 @@ void UEyeCamNodelet::frameGrabLoop() {
 		
         	ros_cam_pub_.publish(img_msg_ptr, cam_info_msg_ptr);
 	}
+	
+	// compute optimal params for next image frame (in any case)
+	optimizeCaptureParams(*img_msg_ptr);
 
       }// end if (processNextFrame(eventTimeout) != NULL)
     } else {
@@ -1448,7 +1449,7 @@ void UEyeCamNodelet::sendSlaveExposure()
 
 		msg.exposure_ms = adaptive_exposure_ms_;
 		//msg.frame_sequence = ros_frame_count_ + 1;
-		
+		//INFO_STREAM("master sent exposure value is: " << adaptive_exposure_ms_);
 		ros_exposure_pub_.publish(msg);
 	}
 };

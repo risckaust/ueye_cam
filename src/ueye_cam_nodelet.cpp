@@ -1466,15 +1466,14 @@ unsigned int UEyeCamNodelet::stampAndPublishImage(unsigned int index)
 		image = image_buffer_.at(index);
 		cinfo = cinfo_buffer_.at(index);
 
-		// copy trigger time + half of the exposure time
-		double timestamp = ros::Time(0).toSec() + timestamp_buffer_.at(timestamp_index).frame_stamp.toSec() + (adaptive_exposure_ms_/1000.0);
-
 		//ERROR_STREAM(timestamp_buffer_.at(timestamp_index).frame_stamp.toSec());
 		//INFO_STREAM("Image seq: " << image_buffer_.at(index).header.seq << " corresponds to " << "Timestamp seq: " << ((uint)timestamp_buffer_.at(timestamp_index).frame_seq_id));
 
-		image.header.stamp = ros::Time(timestamp);
+		// copy trigger time// + half of the exposure time
+		image.header.stamp = timestamp_buffer_.at(timestamp_index).frame_stamp;// + ros::Duration(adaptive_exposure_ms_/2000.0);
 		cinfo.header = image.header;
-
+		
+		//INFO_STREAM("trigger time nsec: " << timestamp_buffer_.at(timestamp_index).frame_stamp << " cam time nsec: " << image.header.stamp);
 		// Publish image in ROS
 		ros_cam_pub_.publish(image, cinfo);
 		

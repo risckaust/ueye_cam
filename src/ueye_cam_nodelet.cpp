@@ -1062,19 +1062,17 @@ void UEyeCamNodelet::frameGrabLoop() {
         sensor_msgs::ImagePtr img_msg_ptr(new sensor_msgs::Image(ros_image_));
         sensor_msgs::CameraInfoPtr cam_info_msg_ptr(new sensor_msgs::CameraInfo(ros_cam_info_));
         
-	if (!cam_params_.do_imu_sync) {
-          // Initialize/compute frame timestamp based on clock tick value from camera
-          if (init_ros_time_.isZero()) {
-            if(getClockTick(&init_clock_tick_)) {
-              init_ros_time_ = getImageTimestamp();
+        // Initialize/compute frame timestamp based on clock tick value from camera
+        if (init_ros_time_.isZero()) {
+          if(getClockTick(&init_clock_tick_)) {
+            init_ros_time_ = getImageTimestamp();
 
-              // Deal with instability in getImageTimestamp due to daylight savings time
-              if (abs((ros::Time::now() - init_ros_time_).toSec()) > abs((ros::Time::now() - (init_ros_time_+ros::Duration(3600,0))).toSec())) { init_ros_time_ += ros::Duration(3600,0); }
-              if (abs((ros::Time::now() - init_ros_time_).toSec()) > abs((ros::Time::now() - (init_ros_time_-ros::Duration(3600,0))).toSec())) { init_ros_time_ -= ros::Duration(3600,0); }
-            }
+            // Deal with instability in getImageTimestamp due to daylight savings time
+            if (abs((ros::Time::now() - init_ros_time_).toSec()) > abs((ros::Time::now() - (init_ros_time_+ros::Duration(3600,0))).toSec())) { init_ros_time_ += ros::Duration(3600,0); }
+            if (abs((ros::Time::now() - init_ros_time_).toSec()) > abs((ros::Time::now() - (init_ros_time_-ros::Duration(3600,0))).toSec())) { init_ros_time_ -= ros::Duration(3600,0); }
           }
-          img_msg_ptr->header.stamp = cam_info_msg_ptr->header.stamp = getImageTickTimestamp();
-	}
+        }
+        img_msg_ptr->header.stamp = cam_info_msg_ptr->header.stamp = getImageTickTimestamp();
 
         // Process new frame
 #ifdef DEBUG_PRINTOUT_FRAME_GRAB_RATES
@@ -1173,7 +1171,7 @@ void UEyeCamNodelet::frameGrabLoop() {
 		buffer_mutex_.lock();
 		if (image_buffer_.size() && timestamp_buffer_.size()) {
 			unsigned int i;
-			INFO_STREAM("image_buffer_ size: " << image_buffer_.size() << ", stamp_buffer_ size: " << timestamp_buffer_.size());
+			//INFO_STREAM("image_buffer_ size: " << image_buffer_.size() << ", stamp_buffer_ size: " << timestamp_buffer_.size());
 			for (i = 0; i < image_buffer_.size() && timestamp_buffer_.size() > 0 ;) {
 				i += stampAndPublishImage(i);
 			}
@@ -1450,9 +1448,28 @@ unsigned int UEyeCamNodelet::stampAndPublishImage(unsigned int index)
 		//ERROR_STREAM(timestamp_buffer_.at(timestamp_index).frame_stamp.toSec());
 		//INFO_STREAM("Image seq: " << image_buffer_.at(index).header.seq << " corresponds to " << "Timestamp seq: " << ((uint)timestamp_buffer_.at(timestamp_index).frame_seq_id));
 
+		// adaptive sync
+		// Check time correction offset, if too large, there might be a misalignment(shift). So need to compensate that
+		const double tolerance = 0.01; // sec
+		double correction = image.header.stamp.toSec() - timestamp_buffer_.at(timestamp_index).frame_stamp.toSec();
+
 		// copy trigger time// + half of the exposure time
 		image.header.stamp = timestamp_buffer_.at(timestamp_index).frame_stamp;// + ros::Duration(adaptive_exposure_ms_/2000.0);
 		cinfo.header = image.header;
+		
+		// adjust the sequence offset accordingly
+		if (correction > tolerance) {
+			stamp_buffer_offset_ ++; // gradually increase the offset, (step can be computed by correction*framerate/1000, but will need to adapt different framerate)z
+			timestamp_buffer_.erase(timestamp_buffer_.begin()); // delete the oldest timestamp_buffer
+			ROS_INFO_STREAM("correction is: " <<correction); // tested about -0.05s
+			ROS_INFO_STREAM("Time sequence shift detected, now trigger stamp starting sequence increase to: " << stamp_buffer_offset_);
+		} if (correction < -tolerance) {
+			stamp_buffer_offset_ --; // gradually decrease the offset
+			image_buffer_.erase(image_buffer_.begin()); //delete the oldest image_buffer
+			cinfo_buffer_.erase(cinfo_buffer_.begin()); //delete the oldest cinfo_buffer
+			ROS_INFO_STREAM("correction is: " <<correction); // tested about -0.05s
+			ROS_INFO_STREAM("Time sequence shift detected, now trigger stamp starting sequence decrease to: " << stamp_buffer_offset_);
+		}
 		
 		//INFO_STREAM("trigger time nsec: " << timestamp_buffer_.at(timestamp_index).frame_stamp << " cam time nsec: " << image.header.stamp);
 		// Publish image in ROS
@@ -1462,9 +1479,9 @@ unsigned int UEyeCamNodelet::stampAndPublishImage(unsigned int index)
 		//publishRectifiedImage(image);
 		//INFO_STREAM("image_buffer size: " << image_buffer_.size() << ", cinfo_buffer size: " << cinfo_buffer_.size() << ", timestamp_buffer size: " << timestamp_buffer_.size());
 		// Erase published images and used timestamp from buffer
-		image_buffer_.erase(image_buffer_.begin() + index);
-		cinfo_buffer_.erase(cinfo_buffer_.begin() + index);
-		timestamp_buffer_.erase(timestamp_buffer_.begin() + timestamp_index);
+		if (image_buffer_.size()) image_buffer_.erase(image_buffer_.begin() + index);
+		if (cinfo_buffer_.size()) cinfo_buffer_.erase(cinfo_buffer_.begin() + index);
+		if (timestamp_buffer_.size()) timestamp_buffer_.erase(timestamp_buffer_.begin() + timestamp_index);
 		return 0;
 
 	} else {
@@ -1481,6 +1498,7 @@ int UEyeCamNodelet::findInStampBuffer(unsigned int index)
 	// Check whether image in image buffer with index "index" has corresponding element in timestamp buffer
 	unsigned int k = 0;
 	
+	// sequence based method
 	while (k < timestamp_buffer_.size() && ros::ok()) {
 		if (image_buffer_.at(index).header.seq == ((uint)timestamp_buffer_.at(k).frame_seq_id - stamp_buffer_offset_)) {
 			//INFO_STREAM("Found match k=" << k << ", index=" << index << "! image seq: " << image_buffer_.at(index).header.seq << ", buffer header seq: " << ((uint)timestamp_buffer_.at(k).frame_seq_id));

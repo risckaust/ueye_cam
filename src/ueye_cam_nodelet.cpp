@@ -960,32 +960,14 @@ void UEyeCamNodelet::frameGrabLoop() {
       	output_rate_mutex_.unlock();
 
 	cam_params_.ext_trigger_mode = 1; // force set ext_trigger_mode
-      	if (cam_params_.ext_trigger_mode) {
-        	if (setExtTriggerMode() != IS_SUCCESS) {
-        		NODELET_ERROR_STREAM("Shutting down UEye camera interface...");
-        		ros::shutdown();
-        		return;
-        	}
-        	NODELET_INFO_STREAM("Camera " << cam_name_ << " set to external trigger mode");
-      	} else {
-        	if (setFreeRunMode() != IS_SUCCESS) {
-        		ERROR_STREAM("Shutting down driver nodelet for [" << cam_name_ << "]");
-        		ros::shutdown();
-        		return;
-        	}
-
-       		// NOTE: need to copy flash parameters to local copies since
-       		//       cam_params_.flash_duration is type int, and also sizeof(int)
-       		//       may not equal to sizeof(INT) / sizeof(UINT)
-       		INT flash_delay = cam_params_.flash_delay;
-       		UINT flash_duration = cam_params_.flash_duration;
-       		setFlashParams(flash_delay, flash_duration);
-       		// Copy back actual flash parameter values that were set
-       		cam_params_.flash_delay = flash_delay;
-       		cam_params_.flash_duration = flash_duration;
-
-       		INFO_STREAM("[" << cam_name_ << "] set to free-run mode");
-	}
+        if (setExtTriggerMode() != IS_SUCCESS) {
+        	NODELET_ERROR_STREAM("Shutting down UEye camera interface...");
+        	ros::shutdown();
+        	return;
+        }
+	
+        NODELET_INFO_STREAM("Camera " << cam_name_ << " set to external trigger mode");
+      	
 	sendTriggerReady();
   }
 
@@ -1191,8 +1173,7 @@ void UEyeCamNodelet::frameGrabLoop() {
 		buffer_mutex_.lock();
 		if (image_buffer_.size() && timestamp_buffer_.size()) {
 			unsigned int i;
-			//INFO_STREAM("image_buffer_ size: " << image_buffer_.size() << 
-				//	", stamp_buffer_ size: " << timestamp_buffer_.size());
+			INFO_STREAM("image_buffer_ size: " << image_buffer_.size() << ", stamp_buffer_ size: " << timestamp_buffer_.size());
 			for (i = 0; i < image_buffer_.size() && timestamp_buffer_.size() > 0 ;) {
 				i += stampAndPublishImage(i);
 			}
@@ -1427,7 +1408,7 @@ void UEyeCamNodelet::sendTriggerReady()
 	int i=0; 
 	while (processNextFrame(2000) != NULL) {i++;} // this should flush all the unused frame in the camera buffer
 	INFO_STREAM("Flashed " << i << " images from camera buffer prior to start!");
-
+	
 	acknTriggerCommander(); // call service: second ackn will RESTART px4 triggering
 };
 

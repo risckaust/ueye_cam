@@ -1578,7 +1578,7 @@ void UEyeCamNodelet::optimizeCaptureParams(const sensor_msgs::Image &frame)
 		// TODO parameterize this 
 		double setpoint = 2.4;
 		double deadband = 0.1;
-		double adaptive_exposure_max_ = 10.0; //ms, 1.0 / 30.0 * 1000.0 / 2.0 allow half of the trigger time interval to make sure not skipping frames, since there is readout time for image from ueye cam manual.
+		double adaptive_exposure_max_ = 15.0; //ms, 1.0 / 30.0 * 1000.0 / 2.0 allow half of the trigger time interval to make sure not skipping frames, since there is readout time for image from ueye cam manual.
 		double adaptive_exposure_min_ = 0.01;
 		double kp = 1.2;
 	

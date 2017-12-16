@@ -662,7 +662,7 @@ void UEyeCamNodelet::configCallback(ueye_cam::UEyeCamConfig& config, uint32_t le
   }
   
   // MINE reconfig to LOCK EXPOSURE!!!!!!!!!!!!!!!!!!!!!!!!!!
-  bool autoExposureToSet = !config.lock_exposure;
+  /*bool autoExposureToSet = !config.lock_exposure;
   double instantExposure;
   if (is_Exposure(cam_handle_, IS_EXPOSURE_CMD_GET_EXPOSURE, &instantExposure, sizeof(instantExposure)) != IS_SUCCESS) {
     std::cout<< "Failed to query exposure timing for UEye camera" <<std::endl;
@@ -684,7 +684,7 @@ void UEyeCamNodelet::configCallback(ueye_cam::UEyeCamConfig& config, uint32_t le
     } else {
       std::cout<< "unLocked exposure to" << instantExposure << std::endl;
     }
-  }
+  }*/
   //!!!!!!!!!!!!!!!!!!!!!!!
   
   if (config.auto_white_balance != cam_params_.auto_white_balance ||

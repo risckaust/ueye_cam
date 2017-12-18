@@ -970,6 +970,9 @@ void UEyeCamNodelet::frameGrabLoop() {
       	
 	sendTriggerReady();
   }
+  
+  // set camera model for rectification
+  camera_model_.fromCameraInfo (ros_cam_info_);
 
   // Grabbing loop
   int prevNumSubscribers = 0;
@@ -1057,7 +1060,7 @@ void UEyeCamNodelet::frameGrabLoop() {
       INT eventTimeout = (cam_params_.auto_frame_rate || cam_params_.ext_trigger_mode) ?
           (INT) 2000 : (INT) (1000.0 / cam_params_.frame_rate * 1.9); // tide strick timeout to avoid skipping frame. 
       if (processNextFrame(eventTimeout) != NULL) {
-      //if (1){
+
         // Initialize shared pointers from member messages for nodelet intraprocess publishing
         sensor_msgs::ImagePtr img_msg_ptr(new sensor_msgs::Image(ros_image_));
         sensor_msgs::CameraInfoPtr cam_info_msg_ptr(new sensor_msgs::CameraInfo(ros_cam_info_));
@@ -1450,7 +1453,7 @@ unsigned int UEyeCamNodelet::stampAndPublishImage(unsigned int index)
 
 		// adaptive sync
 		// Check time correction offset, if too large, there might be a misalignment(shift). So need to compensate that
-		const double tolerance = 0.01; // sec
+		const double tolerance = 0.49/cam_params_.frame_rate; // sec, half the frame period
 		double correction = image.header.stamp.toSec() - timestamp_buffer_.at(timestamp_index).frame_stamp.toSec();
 
 		// copy trigger time// + half of the exposure time
@@ -1476,7 +1479,7 @@ unsigned int UEyeCamNodelet::stampAndPublishImage(unsigned int index)
 		ros_cam_pub_.publish(image, cinfo);
 		
 		// Publish rectified images
-		//publishRectifiedImage(image);
+		publishRectifiedImage(image);
 		//INFO_STREAM("image_buffer size: " << image_buffer_.size() << ", cinfo_buffer size: " << cinfo_buffer_.size() << ", timestamp_buffer size: " << timestamp_buffer_.size());
 		// Erase published images and used timestamp from buffer
 		if (image_buffer_.size()) image_buffer_.erase(image_buffer_.begin() + index);

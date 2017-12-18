@@ -1533,8 +1533,21 @@ void UEyeCamNodelet::publishRectifiedImage(const sensor_msgs::Image &frame)
 	cv::Mat frame_rect;
 	camera_model_.rectifyImage(cv_ptr->image, frame_rect, cv::INTER_LINEAR);
 	
+	// crop
+	float image_size_width = 752;
+	float image_size_height = 480; 
+	float percent = 0.6;
+	cv::Mat frame_rect_cropped;
+	resize(frame_rect (cv::Rect (image_size_width*(1-percent)/2, 
+				image_size_height*(1-percent)/2, 
+				image_size_width*percent, 
+				image_size_height*percent)),
+		frame_rect_cropped, 
+		cv::Size(image_size_width, image_size_height));
+
 	// Publish rectified image
-	sensor_msgs::ImagePtr rect_msg = cv_bridge::CvImage(frame.header, frame.encoding, frame_rect).toImageMsg();
+	//sensor_msgs::ImagePtr rect_msg = cv_bridge::CvImage(frame.header, frame.encoding, frame_rect).toImageMsg();
+	sensor_msgs::ImagePtr rect_msg = cv_bridge::CvImage(frame.header, frame.encoding, frame_rect_cropped).toImageMsg();
 	ros_rect_pub_.publish(rect_msg);
 
 };

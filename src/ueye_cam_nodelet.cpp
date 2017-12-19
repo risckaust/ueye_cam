@@ -1536,7 +1536,7 @@ void UEyeCamNodelet::publishRectifiedImage(const sensor_msgs::Image &frame)
 	// crop
 	float image_size_width = 752;
 	float image_size_height = 480; 
-	float percent = 0.6;
+	float percent = 0.4;
 	cv::Mat frame_rect_cropped;
 	resize(frame_rect (cv::Rect (image_size_width*(1-percent)/2, 
 				image_size_height*(1-percent)/2, 

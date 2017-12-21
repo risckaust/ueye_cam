@@ -1479,7 +1479,7 @@ unsigned int UEyeCamNodelet::stampAndPublishImage(unsigned int index)
 		ros_cam_pub_.publish(image, cinfo);
 		
 		// Publish rectified images
-		publishRectifiedImage(image);
+		//publishRectifiedImage(image);
 		//INFO_STREAM("image_buffer size: " << image_buffer_.size() << ", cinfo_buffer size: " << cinfo_buffer_.size() << ", timestamp_buffer size: " << timestamp_buffer_.size());
 		// Erase published images and used timestamp from buffer
 		if (image_buffer_.size()) image_buffer_.erase(image_buffer_.begin() + index);

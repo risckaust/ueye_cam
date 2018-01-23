@@ -1183,13 +1183,11 @@ void UEyeCamNodelet::frameGrabLoop() {
 
 		// Check whether buffer has stale data and if so, throw away oldest
 		if (image_buffer_.size() > 100) {
-			image_buffer_.erase(image_buffer_.begin());
+			image_buffer_.erase(image_buffer_.begin(), image_buffer_.begin()+50);
+			cinfo_buffer_.erase(cinfo_buffer_.begin(), cinfo_buffer_.begin()+50);
 			//ROS_ERROR_THROTTLE(1, "%i: Dropping image", cam_id_);
 			INFO_STREAM("Dropping half of the image buffer");
-		}
-
-		if (cinfo_buffer_.size() > 100) 
-			cinfo_buffer_.erase(cinfo_buffer_.begin());
+		}		
 		
 	
 	// For non sync cases
@@ -1463,13 +1461,13 @@ unsigned int UEyeCamNodelet::stampAndPublishImage(unsigned int index)
 		// adjust the sequence offset accordingly
 		if (correction > tolerance) {
 			stamp_buffer_offset_ ++; // gradually increase the offset, (step can be computed by correction*framerate/1000, but will need to adapt different framerate)z
-			timestamp_buffer_.erase(timestamp_buffer_.begin()); // delete the oldest timestamp_buffer
+			image_buffer_.erase(image_buffer_.begin()); //delete the oldest image_buffer
+			cinfo_buffer_.erase(cinfo_buffer_.begin()); //delete the oldest cinfo_buffer
 			ROS_INFO_STREAM("correction is: " <<correction); // tested about -0.05s
 			ROS_INFO_STREAM("Time sequence shift detected, now trigger stamp starting sequence increase to: " << stamp_buffer_offset_);
 		} if (correction < -tolerance) {
 			stamp_buffer_offset_ --; // gradually decrease the offset
-			image_buffer_.erase(image_buffer_.begin()); //delete the oldest image_buffer
-			cinfo_buffer_.erase(cinfo_buffer_.begin()); //delete the oldest cinfo_buffer
+			timestamp_buffer_.erase(timestamp_buffer_.begin()); // delete the oldest timestamp_buffer
 			ROS_INFO_STREAM("correction is: " <<correction); // tested about -0.05s
 			ROS_INFO_STREAM("Time sequence shift detected, now trigger stamp starting sequence decrease to: " << stamp_buffer_offset_);
 		}
@@ -1480,7 +1478,7 @@ unsigned int UEyeCamNodelet::stampAndPublishImage(unsigned int index)
 		
 		// Publish rectified images
 		//publishRectifiedImage(image);
-		//INFO_STREAM("image_buffer size: " << image_buffer_.size() << ", cinfo_buffer size: " << cinfo_buffer_.size() << ", timestamp_buffer size: " << timestamp_buffer_.size());
+		INFO_STREAM("image_buffer size: " << image_buffer_.size() << ", cinfo_buffer size: " << cinfo_buffer_.size() << ", timestamp_buffer size: " << timestamp_buffer_.size());
 		// Erase published images and used timestamp from buffer
 		if (image_buffer_.size()) image_buffer_.erase(image_buffer_.begin() + index);
 		if (cinfo_buffer_.size()) cinfo_buffer_.erase(cinfo_buffer_.begin() + index);

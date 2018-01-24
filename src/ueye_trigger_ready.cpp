@@ -13,7 +13,7 @@ public:
 		cam0_OK_ = false;
 		cam1_OK_ = false;
 		framerate_hz_ = 18; // default framerate TODO get this from the ueye node
-		triggerClient_ = n_.serviceClient<mavros_msgs::CommandTriggerControl>("/mavros/cmd/trigger_control");
+		triggerClient_ = n_.serviceClient<mavros_msgs::CommandTriggerControl>("/ddd_mav/cmd/trigger_control");
 		advertiseService();
 	}
 

@@ -173,7 +173,7 @@ void UEyeCamNodelet::onInit() {
 	
   ros_exposure_pub_ = nh.advertise<ueye_cam::Exposure>("master_exposure", 1);
 
-  ros_timestamp_sub_ = nh.subscribe("mavros/cam_imu_sync/cam_imu_stamp", 1,
+  ros_timestamp_sub_ = nh.subscribe("ddd_mav/cam_imu_sync/cam_imu_stamp", 1,
 					  &UEyeCamNodelet::bufferTimestamp, this);
   ros_exposure_sub_ = nh.subscribe("master_exposure", 1,
 					  &UEyeCamNodelet::setSlaveExposure, this);

@@ -1465,11 +1465,13 @@ unsigned int UEyeCamNodelet::stampAndPublishImage(unsigned int index)
 			cinfo_buffer_.erase(cinfo_buffer_.begin()); //delete the oldest cinfo_buffer
 			ROS_INFO_STREAM("correction is: " <<correction); // tested about -0.05s
 			ROS_INFO_STREAM("Time sequence shift detected, now trigger stamp starting sequence increase to: " << stamp_buffer_offset_);
+			ROS_INFO_STREAM("image_buffer size: " << image_buffer_.size() << ", cinfo_buffer size: " << cinfo_buffer_.size() << ", timestamp_buffer size: " << timestamp_buffer_.size());
 		} if (correction < -tolerance) {
 			stamp_buffer_offset_ --; // gradually decrease the offset
 			timestamp_buffer_.erase(timestamp_buffer_.begin()); // delete the oldest timestamp_buffer
 			ROS_INFO_STREAM("correction is: " <<correction); // tested about -0.05s
 			ROS_INFO_STREAM("Time sequence shift detected, now trigger stamp starting sequence decrease to: " << stamp_buffer_offset_);
+			ROS_INFO_STREAM("image_buffer size: " << image_buffer_.size() << ", cinfo_buffer size: " << cinfo_buffer_.size() << ", timestamp_buffer size: " << timestamp_buffer_.size());
 		}
 		
 		//INFO_STREAM("trigger time nsec: " << timestamp_buffer_.at(timestamp_index).frame_stamp << " cam time nsec: " << image.header.stamp);

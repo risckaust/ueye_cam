@@ -119,6 +119,7 @@ UEyeCamNodelet::UEyeCamNodelet():
   cam_params_.flip_lr = false;
   cam_params_.do_imu_sync = true;
   cam_params_.adaptive_exposure_mode_ = 2;
+  sync_buffer_size_ = 100;
 };
 
 
@@ -1181,15 +1182,7 @@ void UEyeCamNodelet::frameGrabLoop() {
 		}
 		buffer_mutex_.unlock();
 
-		// Check whether buffer has stale data and if so, throw away oldest
-		if (image_buffer_.size() > 100) {
-			image_buffer_.erase(image_buffer_.begin(), image_buffer_.begin()+50);
-			cinfo_buffer_.erase(cinfo_buffer_.begin(), cinfo_buffer_.begin()+50);
-			//ROS_ERROR_THROTTLE(1, "%i: Dropping image", cam_id_);
-			INFO_STREAM("Dropping half of the image buffer");
-		}		
-		
-	
+
 	// For non sync cases
 	} else {
         	if (!fillMsgData(*img_msg_ptr)) {
@@ -1378,13 +1371,6 @@ void UEyeCamNodelet::bufferTimestamp(const mavros_msgs::CamIMUStamp &msg)
 	if(cam_params_.do_imu_sync) {
 		buffer_mutex_.lock();
 		timestamp_buffer_.push_back(msg);
-		//ROS_INFO("timestamp_buffer value: %u", ((uint)(timestamp_buffer_.end()-1)->frame_seq_id));
-		// Check whether buffer has stale stamp and if so throw away oldest
-		if (timestamp_buffer_.size() > 100) {
-			timestamp_buffer_.erase(timestamp_buffer_.begin(), timestamp_buffer_.begin()+50);
-			//ROS_ERROR_THROTTLE(1, "Dropping timestamp");
-			INFO_STREAM("Dropping half of the timestamp buffer.");
-		}
 		buffer_mutex_.unlock();
 	}
 };
@@ -1451,22 +1437,21 @@ unsigned int UEyeCamNodelet::stampAndPublishImage(unsigned int index)
 
 		// adaptive sync
 		// Check time correction offset, if too large, there might be a misalignment(shift). So need to compensate that
-		const double tolerance = 0.49/cam_params_.frame_rate; // sec, half the frame period
-		double correction = image.header.stamp.toSec() - timestamp_buffer_.at(timestamp_index).frame_stamp.toSec();
+		int correction = image_buffer_.size() - timestamp_buffer_.size();
 
 		// copy trigger time// + half of the exposure time
 		image.header.stamp = timestamp_buffer_.at(timestamp_index).frame_stamp;// + ros::Duration(adaptive_exposure_ms_/2000.0);
 		cinfo.header = image.header;
 		
 		// adjust the sequence offset accordingly
-		if (correction > tolerance) {
+		if (correction > 0) {
 			stamp_buffer_offset_ ++; // gradually increase the offset, (step can be computed by correction*framerate/1000, but will need to adapt different framerate)z
 			image_buffer_.erase(image_buffer_.begin()); //delete the oldest image_buffer
 			cinfo_buffer_.erase(cinfo_buffer_.begin()); //delete the oldest cinfo_buffer
 			ROS_INFO_STREAM("correction is: " <<correction); // tested about -0.05s
 			ROS_INFO_STREAM("Time sequence shift detected, now trigger stamp starting sequence increase to: " << stamp_buffer_offset_);
 			ROS_INFO_STREAM("image_buffer size: " << image_buffer_.size() << ", cinfo_buffer size: " << cinfo_buffer_.size() << ", timestamp_buffer size: " << timestamp_buffer_.size());
-		} if (correction < -tolerance) {
+		} if (correction < 0) {
 			stamp_buffer_offset_ --; // gradually decrease the offset
 			timestamp_buffer_.erase(timestamp_buffer_.begin()); // delete the oldest timestamp_buffer
 			ROS_INFO_STREAM("correction is: " <<correction); // tested about -0.05s

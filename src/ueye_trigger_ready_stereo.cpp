@@ -12,7 +12,9 @@ public:
 	{
 		cam0_OK_ = false;
 		cam1_OK_ = false;
-		framerate_hz_ = 18; // default framerate TODO get this from the ueye node
+		if (n_.getParam("/ddd_cam_nodelet_cam0/frame_rate", framerate_hz_)) ROS_INFO_STREAM("ueye_trigure_ready_stereo: framerate set to: " << framerate_hz_);
+		else ROS_ERROR("ueye_trigure_ready_stereo: Fail to load parameter: framerate");
+
 		triggerClient_ = n_.serviceClient<mavros_msgs::CommandTriggerControl>("/ddd_mav/cmd/trigger_control");
 		advertiseService();
 	}

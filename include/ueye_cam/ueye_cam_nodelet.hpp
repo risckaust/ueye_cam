@@ -242,6 +242,7 @@ protected:
   image_geometry::PinholeCameraModel camera_model_;
   
   // Data buffers
+  int sync_buffer_size_;
   std::vector<sensor_msgs::Image> image_buffer_;
   std::vector<sensor_msgs::CameraInfo> cinfo_buffer_;
   std::vector<mavros_msgs::CamIMUStamp> timestamp_buffer_;

@@ -1180,6 +1180,7 @@ void UEyeCamNodelet::frameGrabLoop() {
 				i += stampAndPublishImage(i);
 			}
 		}
+		adaptiveSync();
 		buffer_mutex_.unlock();
 
 
@@ -1384,8 +1385,10 @@ void UEyeCamNodelet::sendTriggerReady()
 	ros::Duration(1).sleep(); // wait for timestamp callback from mavros
 	if (timestamp_buffer_.empty())
 		stamp_buffer_offset_ = 0;
-	else
+	else {
 		stamp_buffer_offset_ = 1 + (uint)(timestamp_buffer_.end()-1)->frame_seq_id;
+		stamp_buffer_offset_double_ = (double)stamp_buffer_offset_;
+	}
 	INFO_STREAM("Detected px4 starting stamp sequence will be: " << stamp_buffer_offset_);
 
 	timestamp_buffer_.clear(); // timestamp_buffer_ should have some elements already from px4 since it is in a different thread.
@@ -1432,32 +1435,9 @@ unsigned int UEyeCamNodelet::stampAndPublishImage(unsigned int index)
 		image = image_buffer_.at(index);
 		cinfo = cinfo_buffer_.at(index);
 
-		//ERROR_STREAM(timestamp_buffer_.at(timestamp_index).frame_stamp.toSec());
-		//INFO_STREAM("Image seq: " << image_buffer_.at(index).header.seq << " corresponds to " << "Timestamp seq: " << ((uint)timestamp_buffer_.at(timestamp_index).frame_seq_id));
-
-		// adaptive sync
-		// Check time correction offset, if too large, there might be a misalignment(shift). So need to compensate that
-		int correction = image_buffer_.size() - timestamp_buffer_.size();
-
 		// copy trigger time// + half of the exposure time
 		image.header.stamp = timestamp_buffer_.at(timestamp_index).frame_stamp;// + ros::Duration(adaptive_exposure_ms_/2000.0);
 		cinfo.header = image.header;
-		
-		// adjust the sequence offset accordingly
-		if (correction > 0) {
-			stamp_buffer_offset_ ++; // gradually increase the offset, (step can be computed by correction*framerate/1000, but will need to adapt different framerate)z
-			image_buffer_.erase(image_buffer_.begin()); //delete the oldest image_buffer
-			cinfo_buffer_.erase(cinfo_buffer_.begin()); //delete the oldest cinfo_buffer
-			ROS_INFO_STREAM("correction is: " <<correction); // tested about -0.05s
-			ROS_INFO_STREAM("Time sequence shift detected, now trigger stamp starting sequence increase to: " << stamp_buffer_offset_);
-			ROS_INFO_STREAM("image_buffer size: " << image_buffer_.size() << ", cinfo_buffer size: " << cinfo_buffer_.size() << ", timestamp_buffer size: " << timestamp_buffer_.size());
-		} if (correction < 0) {
-			stamp_buffer_offset_ --; // gradually decrease the offset
-			timestamp_buffer_.erase(timestamp_buffer_.begin()); // delete the oldest timestamp_buffer
-			ROS_INFO_STREAM("correction is: " <<correction); // tested about -0.05s
-			ROS_INFO_STREAM("Time sequence shift detected, now trigger stamp starting sequence decrease to: " << stamp_buffer_offset_);
-			ROS_INFO_STREAM("image_buffer size: " << image_buffer_.size() << ", cinfo_buffer size: " << cinfo_buffer_.size() << ", timestamp_buffer size: " << timestamp_buffer_.size());
-		}
 		
 		//INFO_STREAM("trigger time nsec: " << timestamp_buffer_.at(timestamp_index).frame_stamp << " cam time nsec: " << image.header.stamp);
 		// Publish image in ROS
@@ -1615,6 +1595,31 @@ void UEyeCamNodelet::optimizeCaptureParams(const sensor_msgs::Image &frame)
 
 	}
 
+};
+
+
+void UEyeCamNodelet::adaptiveSync()
+{
+	// adaptive sync
+	// frontior shift mean.
+	double a = 0.9;
+	stamp_buffer_offset_double_ = a*stamp_buffer_offset_double_ + (1-a)*(timestamp_buffer_.end()->frame_seq_id - image_buffer_.end()->header.seq);
+	int correction = (int)stamp_buffer_offset_double_ - stamp_buffer_offset_;
+	// adjust the sequence offset accordingly
+	if (correction > 0) {
+		stamp_buffer_offset_ ++; // gradually increase the offset, (step can be computed by correction*framerate/1000, but will need to adapt different framerate)z
+		if (image_buffer_.size()) image_buffer_.erase(image_buffer_.begin()); //delete the oldest image_buffer
+		if (cinfo_buffer_.size()) cinfo_buffer_.erase(cinfo_buffer_.begin()); //delete the oldest cinfo_buffer
+		ROS_INFO_STREAM("[ " << cam_name_ << " ] correction is: " <<correction); // tested about -0.05s
+		ROS_INFO_STREAM("[ " << cam_name_ << " ] Time sequence shift detected, now trigger stamp starting sequence increase to: " << stamp_buffer_offset_);
+		ROS_INFO_STREAM("[ " << cam_name_ << " ] image_buffer size: " << image_buffer_.size() << ", cinfo_buffer size: " << cinfo_buffer_.size() << ", timestamp_buffer size: " << timestamp_buffer_.size());
+	} else if (correction < 0) {
+		stamp_buffer_offset_ --; // gradually decrease the offset
+		if (timestamp_buffer_.size()) timestamp_buffer_.erase(timestamp_buffer_.begin()); // delete the oldest timestamp_buffer
+		ROS_INFO_STREAM("[ " << cam_name_ << " ] correction is: " <<correction); // tested about -0.05s
+		ROS_INFO_STREAM("[ " << cam_name_ << " ] Time sequence shift detected, now trigger stamp starting sequence decrease to: " << stamp_buffer_offset_);
+		ROS_INFO_STREAM("[ " << cam_name_ << " ] image_buffer size: " << image_buffer_.size() << ", cinfo_buffer size: " << cinfo_buffer_.size() << ", timestamp_buffer size: " << timestamp_buffer_.size());
+	}
 };
 
 } // namespace ueye_cam

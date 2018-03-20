@@ -198,6 +198,7 @@ protected:
   // XXX descr
   unsigned int stampAndPublishImage(unsigned int index);
   int findInStampBuffer(unsigned int index);
+  void adaptiveSync();
   
   /**
    * Image rectification
@@ -234,6 +235,7 @@ protected:
   sensor_msgs::CameraInfo ros_cam_info_;
   unsigned int ros_frame_count_;
   unsigned int stamp_buffer_offset_;
+  double stamp_buffer_offset_double_;
 
   ros::Publisher timeout_pub_;
   unsigned long long int timeout_count_;

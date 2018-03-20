@@ -1173,6 +1173,7 @@ void UEyeCamNodelet::frameGrabLoop() {
 		output_rate_mutex_.unlock();
 		
 		buffer_mutex_.lock();
+		adaptiveSync();
 		if (image_buffer_.size() && timestamp_buffer_.size()) {
 			unsigned int i;
 			//INFO_STREAM("image_buffer_ size: " << image_buffer_.size() << ", stamp_buffer_ size: " << timestamp_buffer_.size());
@@ -1180,7 +1181,6 @@ void UEyeCamNodelet::frameGrabLoop() {
 				i += stampAndPublishImage(i);
 			}
 		}
-		adaptiveSync();
 		buffer_mutex_.unlock();
 
 

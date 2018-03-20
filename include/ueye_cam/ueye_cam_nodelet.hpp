@@ -234,7 +234,7 @@ protected:
   sensor_msgs::Image ros_image_;
   sensor_msgs::CameraInfo ros_cam_info_;
   unsigned int ros_frame_count_;
-  int stamp_buffer_offset_;
+  unsigned int stamp_buffer_offset_;
   double stamp_buffer_offset_double_;
 
   ros::Publisher timeout_pub_;

@@ -1173,6 +1173,7 @@ void UEyeCamNodelet::frameGrabLoop() {
 		output_rate_mutex_.unlock();
 		
 		buffer_mutex_.lock();
+		//adaptiveSync();		
 		if (image_buffer_.size() && timestamp_buffer_.size()) {
 						
 			unsigned int i;
@@ -1181,9 +1182,15 @@ void UEyeCamNodelet::frameGrabLoop() {
 				i += stampAndPublishImage(i);
 			}
 		}
-		adaptiveSync();
 		buffer_mutex_.unlock();
 
+		// Check whether buffer has stale data and if so, throw away oldest
+		if (image_buffer_.size() > 100) {
+			image_buffer_.erase(image_buffer_.begin(), image_buffer_.begin()+50);
+			cinfo_buffer_.erase(cinfo_buffer_.begin(), cinfo_buffer_.begin()+50);
+			//ROS_ERROR_THROTTLE(1, "%i: Dropping image", cam_id_);
+			INFO_STREAM("[ " << cam_name_ << " ] Dropping half of the image buffer");
+		}
 
 	// For non sync cases
 	} else {
@@ -1373,6 +1380,13 @@ void UEyeCamNodelet::bufferTimestamp(const mavros_msgs::CamIMUStamp &msg)
 	if(cam_params_.do_imu_sync) {
 		buffer_mutex_.lock();
 		timestamp_buffer_.push_back(msg);
+
+		// Check whether buffer has stale stamp and if so throw away oldest
+		if (timestamp_buffer_.size() > 100) {
+			timestamp_buffer_.erase(timestamp_buffer_.begin(), timestamp_buffer_.begin()+50);
+			//ROS_ERROR_THROTTLE(1, "Dropping timestamp");
+			INFO_STREAM("[ " << cam_name_ << " ] Dropping half of the timestamp buffer.");
+		}
 		buffer_mutex_.unlock();
 	}
 };
@@ -1603,19 +1617,16 @@ void UEyeCamNodelet::adaptiveSync()
 		// adaptive sync
 		// frontior shift mean.
 		double a = 0.9;
-		stamp_buffer_offset_double_ = a*stamp_buffer_offset_double_ + (1-a)*(timestamp_buffer_.end()->frame_seq_id - image_buffer_.end()->header.seq);
+		stamp_buffer_offset_double_ = a*stamp_buffer_offset_double_ + (1-a)*((double)(timestamp_buffer_.end()-1)->frame_seq_id - (double)(image_buffer_.end()-1)->header.seq);
 		int correction = (int)stamp_buffer_offset_double_ - stamp_buffer_offset_;
 		// adjust the sequence offset accordingly
 		if (correction > 0) {
 			stamp_buffer_offset_ ++; // gradually increase the offset
-			image_buffer_.erase(image_buffer_.begin()); //delete the oldest image_buffer
-			cinfo_buffer_.erase(cinfo_buffer_.begin()); //delete the oldest cinfo_buffer
-			ROS_INFO_STREAM("[ " << cam_name_ << " ] correction is: " <<correction); // tested about -0.05s
+			ROS_INFO_STREAM("[ " << cam_name_ << " ] correction is: " << correction << ", " << (timestamp_buffer_.end()-1)->frame_seq_id << ", " << (image_buffer_.end()-1)->header.seq); // tested about -0.05s
 			ROS_INFO_STREAM("[ " << cam_name_ << " ] Time sequence shift detected, now trigger stamp starting sequence increase to: " << stamp_buffer_offset_);
 			ROS_INFO_STREAM("[ " << cam_name_ << " ] image_buffer size: " << image_buffer_.size() << ", cinfo_buffer size: " << cinfo_buffer_.size() << ", timestamp_buffer size: " << timestamp_buffer_.size());
 		} else if (correction < 0) {
 			stamp_buffer_offset_ --; // gradually decrease the offset
-			timestamp_buffer_.erase(timestamp_buffer_.begin()); // delete the oldest timestamp_buffer
 			ROS_INFO_STREAM("[ " << cam_name_ << " ] correction is: " <<correction); // tested about -0.05s
 			ROS_INFO_STREAM("[ " << cam_name_ << " ] Time sequence shift detected, now trigger stamp starting sequence decrease to: " << stamp_buffer_offset_);
 			ROS_INFO_STREAM("[ " << cam_name_ << " ] image_buffer size: " << image_buffer_.size() << ", cinfo_buffer size: " << cinfo_buffer_.size() << ", timestamp_buffer size: " << timestamp_buffer_.size());

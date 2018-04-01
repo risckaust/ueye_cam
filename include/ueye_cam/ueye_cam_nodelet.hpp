@@ -206,6 +206,11 @@ protected:
   void publishRectifiedImage(const sensor_msgs::Image &frame);
 
   /**
+   * Image cropping
+   */
+  void publishCroppedImage(const sensor_msgs::Image &frame);
+
+  /**
    * Exposure controller XXX TODO MAKE IT ZERO-COPY
    */
   void optimizeCaptureParams(const sensor_msgs::Image& frame);
@@ -226,6 +231,7 @@ protected:
 
   image_transport::CameraPublisher ros_cam_pub_;
   image_transport::Publisher ros_rect_pub_;
+  image_transport::Publisher ros_cropped_pub_;
   ros::Publisher ros_exposure_pub_;
   
   ros::Subscriber ros_timestamp_sub_;

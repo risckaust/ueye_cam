@@ -163,7 +163,7 @@ void UEyeCamNodelet::onInit() {
   f = bind(&UEyeCamNodelet::configCallback, this, _1, _2);
 
   // Setup publishers, subscribers, and services
-  ros_cam_pub_ = it.advertiseCamera(cam_name_ + "/" + cam_topic_, 1);
+  ros_cam_pub_ = it.advertiseCamera(cam_name_ + "/" + cam_topic_, 3);
   set_cam_info_srv_ = nh.advertiseService(cam_name_ + "/set_camera_info",
       &UEyeCamNodelet::setCamInfo, this);
   timeout_pub_ = nh.advertise<std_msgs::UInt64>(cam_name_ + "/" + timeout_topic_, 1, true);
@@ -171,6 +171,8 @@ void UEyeCamNodelet::onInit() {
 
   // For IMU sync
   ros_rect_pub_ = it.advertise(cam_name_ + "/image_rect", 100); // TODO : not hardcode name
+
+  ros_cropped_pub_ = it.advertise(cam_name_ + "/image_cropped", 3);
 	
   ros_exposure_pub_ = nh.advertise<ueye_cam::Exposure>("master_exposure", 1);
 
@@ -1452,12 +1454,13 @@ unsigned int UEyeCamNodelet::stampAndPublishImage(unsigned int index)
 		image.header.stamp = timestamp_buffer_.at(timestamp_index).frame_stamp;// + ros::Duration(adaptive_exposure_ms_/2000.0);
 		cinfo.header = image.header;
 		
-		//INFO_STREAM("trigger time nsec: " << timestamp_buffer_.at(timestamp_index).frame_stamp << " cam time nsec: " << image.header.stamp);
+		//NODELET_INFO_STREAM("trigger time nsec: " << timestamp_buffer_.at(timestamp_index).frame_stamp << " cam time nsec: " << image.header.stamp);
 		// Publish image in ROS
 		ros_cam_pub_.publish(image, cinfo);
 		
-		// Publish rectified images
-		//publishRectifiedImage(image);
+		// Publish Cropped images
+		publishCroppedImage(image);
+
 		//INFO_STREAM("image_buffer size: " << image_buffer_.size() << ", cinfo_buffer size: " << cinfo_buffer_.size() << ", timestamp_buffer size: " << timestamp_buffer_.size());
 		// Erase published images and used timestamp from buffer
 		if (image_buffer_.size()) image_buffer_.erase(image_buffer_.begin() + index);
@@ -1530,6 +1533,34 @@ void UEyeCamNodelet::publishRectifiedImage(const sensor_msgs::Image &frame)
 
 };
 
+
+void UEyeCamNodelet::publishCroppedImage(const sensor_msgs::Image& frame)
+{
+	
+	cv_bridge::CvImagePtr cv_ptr;
+	try {
+		cv_ptr = cv_bridge::toCvCopy(frame, sensor_msgs::image_encodings::MONO8);
+
+	} catch (cv_bridge::Exception &e) {
+		NODELET_ERROR("cv_bridge exception: %s", e.what());
+		return;
+	}
+	
+	// crop
+	float image_size_width = 752;
+	float image_size_height = 480; 
+	cv::Mat frame_cropped = cv_ptr->image(cv::Rect ((1024-image_size_width)/2, (752-image_size_height)/2, image_size_width, image_size_height));
+	//NODELET_INFO_STREAM("Frame size is: " << cv_ptr->image.cols << " x " << cv_ptr->image.rows);
+
+	//cv::imshow("Image window", frame_cropped);
+	//cv::waitKey(3);
+	// Publish rectified image
+	sensor_msgs::ImagePtr rect_msg = cv_bridge::CvImage(frame.header, frame.encoding, frame_cropped).toImageMsg();
+	ros_cropped_pub_.publish(rect_msg);
+
+};
+
+
 void UEyeCamNodelet::optimizeCaptureParams(const sensor_msgs::Image &frame)
 {
 	
@@ -1572,7 +1603,7 @@ void UEyeCamNodelet::optimizeCaptureParams(const sensor_msgs::Image &frame)
 		// TODO parameterize this 
 		double setpoint = 2.4;
 		double deadband = 0.1;
-		double adaptive_exposure_max_ = 15.0; //ms, 1.0 / 30.0 * 1000.0 / 2.0 allow half of the trigger time interval to make sure not skipping frames, since there is readout time for image from ueye cam manual.
+		double adaptive_exposure_max_ = 8.0; //ms, to make sure not skipping frames, since there is readout time for image from ueye cam manual.
 		double adaptive_exposure_min_ = 0.01;
 		double kp = 1.2;
 	
@@ -1596,6 +1627,8 @@ void UEyeCamNodelet::optimizeCaptureParams(const sensor_msgs::Image &frame)
 		} else if (adaptive_exposure_ms_ < adaptive_exposure_min_) {
 			adaptive_exposure_ms_ = adaptive_exposure_min_;
 		}
+		//ROS_INFO_STREAM("adaptive_exposure_ms_ is " << adaptive_exposure_ms_);
+
 		// Set optimal exposure
 		
 		bool auto_exposure = false;

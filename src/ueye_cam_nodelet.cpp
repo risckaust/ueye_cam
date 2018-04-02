@@ -1549,11 +1549,8 @@ void UEyeCamNodelet::publishCroppedImage(const sensor_msgs::Image& frame)
 	// crop
 	float image_size_width = 752;
 	float image_size_height = 480; 
-	cv::Mat frame_cropped = cv_ptr->image(cv::Rect ((1024-image_size_width)/2, (752-image_size_height)/2, image_size_width, image_size_height));
-	//NODELET_INFO_STREAM("Frame size is: " << cv_ptr->image.cols << " x " << cv_ptr->image.rows);
+	cv::Mat frame_cropped = cv_ptr->image(cv::Rect ((1280-image_size_width)/2, (1024-image_size_height)/2, image_size_width, image_size_height));
 
-	//cv::imshow("Image window", frame_cropped);
-	//cv::waitKey(3);
 	// Publish rectified image
 	sensor_msgs::ImagePtr rect_msg = cv_bridge::CvImage(frame.header, frame.encoding, frame_cropped).toImageMsg();
 	ros_cropped_pub_.publish(rect_msg);
@@ -1575,6 +1572,11 @@ void UEyeCamNodelet::optimizeCaptureParams(const sensor_msgs::Image &frame)
 			ROS_ERROR("cv_bridge exception: %s", e.what());
 			return;
 		}
+		
+		// crop
+		float image_size_width = 752;
+		float image_size_height = 480; 
+		cv::Mat frame_cropped = cv_ptr->image(cv::Rect ((1280-image_size_width)/2, (1024-image_size_height)/2, image_size_width, image_size_height));
 	
 		// Compute the histogram
 		int histSize = 256;
@@ -1582,7 +1584,7 @@ void UEyeCamNodelet::optimizeCaptureParams(const sensor_msgs::Image &frame)
 		const float *histRange = { range };
 		cv::Mat hist ;
 
-		cv::calcHist(&cv_ptr->image, 1, 0, cv::Mat(), hist, 1, &histSize, &histRange, true, false);
+		cv::calcHist(&frame_cropped, 1, 0, cv::Mat(), hist, 1, &histSize, &histRange, true, false);
 		cv::normalize(hist, hist, 1.0 , 0, cv::NORM_L1); // TODO : check normalization
 
 		double j = 0, k = 0;

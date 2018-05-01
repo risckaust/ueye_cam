@@ -1207,6 +1207,8 @@ void UEyeCamNodelet::frameGrabLoop() {
         	if (!frame_grab_alive_ || !ros::ok()) break;
 		
         	ros_cam_pub_.publish(img_msg_ptr, cam_info_msg_ptr);
+          // Publish Cropped images
+          publishCroppedImage(image);
 	}
 	
 	// compute optimal params for next image frame (in any case)

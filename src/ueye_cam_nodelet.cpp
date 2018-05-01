@@ -1040,6 +1040,7 @@ void UEyeCamNodelet::frameGrabLoop() {
 		NODELET_INFO_STREAM("Camera " << cam_name_ << " set to standby mode");
 	}
     	prevNumSubscribers = currNumSubscribers;
+      prevNumSubscribers_cropped = currNumSubscribers_cropped;
     }
 
     // Send updated dyncfg parameters if previously changed

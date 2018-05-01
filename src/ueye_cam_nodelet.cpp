@@ -980,6 +980,8 @@ void UEyeCamNodelet::frameGrabLoop() {
   // Grabbing loop
   int prevNumSubscribers = 0;
   int currNumSubscribers = 0;
+  int prevNumSubscribers_cropped = 0;
+  int currNumSubscribers_cropped = 0;
   bool do_imu_sync_monitor = cam_params_.do_imu_sync;
 //try{
   while (frame_grab_alive_ && ros::ok()) {
@@ -993,7 +995,10 @@ void UEyeCamNodelet::frameGrabLoop() {
     // and stop live video mode if ROS image topic no longer has any subscribers
     if (!cam_params_.do_imu_sync) {
     	currNumSubscribers = ros_cam_pub_.getNumSubscribers();
-    	if (currNumSubscribers > 0 && prevNumSubscribers <= 0) {
+      currNumSubscribers_cropped = ros_cropped_pub_.getNumSubscribers();
+      
+    	if ((currNumSubscribers > 0 && prevNumSubscribers <= 0) ||
+        (currNumSubscribers_cropped > 0 && prevNumSubscribers_cropped <= 0)) {
       		// Reset reference time to prevent throttling first frame
       		output_rate_mutex_.lock();
       		init_publish_time_ = ros::Time(0);
@@ -1197,9 +1202,9 @@ void UEyeCamNodelet::frameGrabLoop() {
 	// For non sync cases
 	} else {
         	if (!fillMsgData(*img_msg_ptr)) {
-			ROS_INFO("Skip one image messge filled.");
-			continue;
-		}
+			       ROS_INFO("Skip one image messge filled.");
+			       continue;
+		      }
 
         	img_msg_ptr->header.seq = cam_info_msg_ptr->header.seq = ros_frame_count_++;
         	img_msg_ptr->header.frame_id = cam_info_msg_ptr->header.frame_id;

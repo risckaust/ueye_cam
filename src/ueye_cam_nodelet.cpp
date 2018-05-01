@@ -1208,11 +1208,11 @@ void UEyeCamNodelet::frameGrabLoop() {
 		
         	ros_cam_pub_.publish(img_msg_ptr, cam_info_msg_ptr);
           // Publish Cropped images
-          publishCroppedImage(image);
+          publishCroppedImage(*img_msg_ptr);
 	}
 	
 	// compute optimal params for next image frame (in any case)
-	optimizeCaptureParams(*img_msg_ptr);
+	optimizeCaptureParams();
 
       }// end if (processNextFrame(eventTimeout) != NULL)
     } else {
@@ -1551,34 +1551,19 @@ void UEyeCamNodelet::publishCroppedImage(const sensor_msgs::Image& frame)
 	// crop
 	float image_size_width = 752;
 	float image_size_height = 480; 
-	cv::Mat frame_cropped = cv_ptr->image(cv::Rect ((1280-image_size_width)/2, (1024-image_size_height)/2, image_size_width, image_size_height));
+	frame_cropped_ = cv_ptr->image(cv::Rect ((1280-image_size_width)/2, (1024-image_size_height)/2, image_size_width, image_size_height));
 
 	// Publish rectified image
-	sensor_msgs::ImagePtr rect_msg = cv_bridge::CvImage(frame.header, frame.encoding, frame_cropped).toImageMsg();
-	ros_cropped_pub_.publish(rect_msg);
+	sensor_msgs::ImagePtr image_msg = cv_bridge::CvImage(frame.header, frame.encoding, frame_cropped_).toImageMsg();
+	ros_cropped_pub_.publish(image_msg);
 
 };
 
 
-void UEyeCamNodelet::optimizeCaptureParams(const sensor_msgs::Image &frame)
+void UEyeCamNodelet::optimizeCaptureParams()
 {
 	
 	if(cam_params_.adaptive_exposure_mode_ == 2 && (ros_frame_count_ % 5 == 0) ) {
-	
-		cv_bridge::CvImagePtr cv_ptr;
-
-		try {
-			cv_ptr = cv_bridge::toCvCopy(frame, sensor_msgs::image_encodings::MONO8);
-
-		} catch (cv_bridge::Exception &e) {
-			ROS_ERROR("cv_bridge exception: %s", e.what());
-			return;
-		}
-		
-		// crop
-		float image_size_width = 752;
-		float image_size_height = 480; 
-		cv::Mat frame_cropped = cv_ptr->image(cv::Rect ((1280-image_size_width)/2, (1024-image_size_height)/2, image_size_width, image_size_height));
 	
 		// Compute the histogram
 		int histSize = 256;
@@ -1586,7 +1571,7 @@ void UEyeCamNodelet::optimizeCaptureParams(const sensor_msgs::Image &frame)
 		const float *histRange = { range };
 		cv::Mat hist ;
 
-		cv::calcHist(&frame_cropped, 1, 0, cv::Mat(), hist, 1, &histSize, &histRange, true, false);
+		cv::calcHist(&frame_cropped_, 1, 0, cv::Mat(), hist, 1, &histSize, &histRange, true, false);
 		cv::normalize(hist, hist, 1.0 , 0, cv::NORM_L1); // TODO : check normalization
 
 		double j = 0, k = 0;

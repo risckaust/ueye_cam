@@ -213,7 +213,7 @@ protected:
   /**
    * Exposure controller XXX TODO MAKE IT ZERO-COPY
    */
-  void optimizeCaptureParams(const sensor_msgs::Image& frame);
+  void optimizeCaptureParams();
 
   /**
    * Returns image's timestamp based on device's internal clock or current wall time if driver call fails.
@@ -280,6 +280,7 @@ protected:
   ros::Time init_publish_time_; // for throttling frames from being published (see cfg.output_rate)
   uint64_t prev_output_frame_idx_; // see init_publish_time_
   boost::mutex output_rate_mutex_;
+  cv::Mat frame_cropped_;
 };
 
 

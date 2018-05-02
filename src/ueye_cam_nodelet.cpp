@@ -1459,7 +1459,7 @@ unsigned int UEyeCamNodelet::stampAndPublishImage(unsigned int index)
 		cinfo = cinfo_buffer_.at(index);
 
 		// copy trigger time// + half of the exposure time
-		image.header.stamp = timestamp_buffer_.at(timestamp_index).frame_stamp;// + ros::Duration(adaptive_exposure_ms_/2000.0);
+		image.header.stamp = timestamp_buffer_.at(timestamp_index).frame_stamp + ros::Duration(adaptive_exposure_ms_/2000.0);
 		cinfo.header = image.header;
 		
 		//NODELET_INFO_STREAM("trigger time nsec: " << timestamp_buffer_.at(timestamp_index).frame_stamp << " cam time nsec: " << image.header.stamp);

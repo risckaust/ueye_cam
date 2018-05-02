@@ -1559,7 +1559,7 @@ void UEyeCamNodelet::publishCroppedImage(const sensor_msgs::Image& frame)
 	float image_size_height = 480; 
 	frame_cropped_ = cv_ptr->image(cv::Rect ((1280-image_size_width)/2, (1024-image_size_height)/2, image_size_width, image_size_height));
 
-	// Publish rectified image
+	// Publish cropped image
 	sensor_msgs::ImagePtr image_msg = cv_bridge::CvImage(frame.header, frame.encoding, frame_cropped_).toImageMsg();
 	ros_cropped_pub_.publish(image_msg);
 
@@ -1597,10 +1597,10 @@ void UEyeCamNodelet::optimizeCaptureParams()
 
 		// TODO parameterize this 
 		double setpoint = 2.4;
-		double deadband = 0.1;
+		double deadband = 1.0;
 		double adaptive_exposure_max_ = 8.0; //ms, to make sure not skipping frames, since there is readout time for image from ueye cam manual.
-		double adaptive_exposure_min_ = 0.01;
-		double kp = 1.2;
+		double adaptive_exposure_min_ = 0.1; // 0.1
+		double rate_max = 1.2;
 	
 		// Amount of change to the shutter speed or aperture value can be
 		// calculated directly from the histogram as the five regions
@@ -1609,11 +1609,18 @@ void UEyeCamNodelet::optimizeCaptureParams()
 		// decrease/increase with one f-stop.
 
 		// Calculate exposure durations
-		if ((msv > setpoint + deadband)) {	// overexposed
-			adaptive_exposure_ms_ *= (1/kp) * (msv - setpoint);
+		double error = msv-setpoint;
+		if (error > deadband && error < rate_max) {	// overexposed
+			adaptive_exposure_ms_ *= 1.0/error;
+		
+		} else if (error >= rate_max) {
+			adaptive_exposure_ms_ *= 1.0/rate_max;
 
-		} else if ((msv < setpoint - deadband)) {	// underexposed
-			adaptive_exposure_ms_ *= kp * (setpoint - msv);
+		} else if (error < -deadband && error > -rate_max) {	// underexposed
+			adaptive_exposure_ms_ *= -error;
+
+		} else if (error <= -rate_max) {
+			adaptive_exposure_ms_ *= rate_max;
 		}
 		
 		// limit exposure timing
@@ -1622,6 +1629,8 @@ void UEyeCamNodelet::optimizeCaptureParams()
 		} else if (adaptive_exposure_ms_ < adaptive_exposure_min_) {
 			adaptive_exposure_ms_ = adaptive_exposure_min_;
 		}
+
+		//ROS_INFO_STREAM("msv = " << msv << ", exposure = " << adaptive_exposure_ms_);
 		//ROS_INFO_STREAM("adaptive_exposure_ms_ is " << adaptive_exposure_ms_);
 
 		// Set optimal exposure

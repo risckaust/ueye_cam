@@ -231,8 +231,9 @@ void UEyeCamNodelet::onInit() {
       "Mirror Image Left Right:\t" << cam_params_.flip_lr << endl <<
       "Do camera px4 hardware sync:\t" << cam_params_.do_imu_sync << endl <<
       "Do adaptive exposure: \t" << cam_params_.adaptive_exposure_mode_ << endl
-      );
-	adaptive_exposure_ms_ = 2.0;
+  );
+	
+  adaptive_exposure_ms_ = 0.0;
 };
 
 
@@ -1599,7 +1600,7 @@ void UEyeCamNodelet::optimizeCaptureParams()
 		double setpoint = 2.4;
 		double deadband = 1.0;
 		double adaptive_exposure_max_ = 8.0; //ms, to make sure not skipping frames, since there is readout time for image from ueye cam manual.
-		double adaptive_exposure_min_ = 0.1; // 0.1
+		double adaptive_exposure_min_ = 0.0; // 0.1
 		double rate_max = 1.2;
 	
 		// Amount of change to the shutter speed or aperture value can be

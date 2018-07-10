@@ -1583,12 +1583,7 @@ void UEyeCamNodelet::optimizeCaptureParams(sensor_msgs::Image image)
 {
 	
 	if(cam_params_.adaptive_exposure_mode_ == 2 && (ros_frame_count_ % 5 == 0) ) {
-	
-		// Compute the histogram
-		int histSize = 256;
-		float range[] = { 0, 256 } ;
-		const float *histRange = { range };
-		cv::Mat hist ;
+  //if(cam_params_.adaptive_exposure_mode_ == 2) {
 
     cv_bridge::CvImagePtr cv_ptr;
     try {
@@ -1599,12 +1594,20 @@ void UEyeCamNodelet::optimizeCaptureParams(sensor_msgs::Image image)
       return;
     }
 
+    // Compute the histogram
+    int histSize = 256;
+    float range[] = { 0, 256 } ;
+    const float *histRange = { range };
+    cv::Mat hist;
 		cv::calcHist(&cv_ptr->image, 1, 0, cv::Mat(), hist, 1, &histSize, &histRange, true, false);
-		cv::normalize(hist, hist, 1.0 , 0, cv::NORM_L1); // TODO : check normalization
+    //cv::cuda::GpuMat src_gpu(cv_ptr->image), hist_gpu;
+    //cv::cuda::histEven(src_gpu, hist_gpu, histSize, (int) range[0], (int) range[1]);
+    //hist_gpu.download(hist);
+    cv::normalize(hist, hist, 1.0, 0, cv::NORM_L1); // TODO : check normalization
 
+    // Calculate mean sample value
 		double j = 0, k = 0;
 		double blocksum = 0;
-		
 		for (int i = 1; i <= histSize; i++) {
 			blocksum += hist.at<float>(i-1);
 			if(i % 51 == 0) {
@@ -1613,12 +1616,10 @@ void UEyeCamNodelet::optimizeCaptureParams(sensor_msgs::Image image)
 				blocksum = 0;
 			}
 		}
-
-		// Calculate mean sample value
 		double msv = j / k;
 
 		// TODO parameterize this 
-		double setpoint = 2.4;
+		double setpoint = 3.0;//2.4;
 		double deadband = 1.0;
 		double adaptive_exposure_max_ = 8.0; //ms, to make sure not skipping frames, since there is readout time for image from ueye cam manual.
 		double adaptive_exposure_min_ = 0.0; // 0.1
@@ -1652,7 +1653,7 @@ void UEyeCamNodelet::optimizeCaptureParams(sensor_msgs::Image image)
 			adaptive_exposure_ms_ = adaptive_exposure_min_;
 		}
 
-		//ROS_INFO_STREAM("msv = " << msv << ", exposure = " << adaptive_exposure_ms_);
+		//ROS_INFO_STREAM("j = " << j << "k = " << k << "msv = " << msv << ", exposure = " << adaptive_exposure_ms_);
 		//ROS_INFO_STREAM("adaptive_exposure_ms_ is " << adaptive_exposure_ms_);
 
 		// Set optimal exposure

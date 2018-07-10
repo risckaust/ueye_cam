@@ -119,7 +119,9 @@ UEyeCamNodelet::UEyeCamNodelet():
   cam_params_.flip_lr = false;
   cam_params_.do_imu_sync = true;
   cam_params_.adaptive_exposure_mode_ = 2;
+  cam_params_.crop_image = false;
   sync_buffer_size_ = 100;
+  adaptive_exposure_ms_ = 0.001;
 };
 
 
@@ -171,8 +173,10 @@ void UEyeCamNodelet::onInit() {
 
   // For IMU sync
   ros_rect_pub_ = it.advertise(cam_name_ + "/image_rect", 100); // TODO : not hardcode name
-
-  ros_cropped_pub_ = it.advertise(cam_name_ + "/image_cropped", 3);
+  
+  if (cam_params_.crop_image) {
+    ros_cropped_pub_ = it.advertise(cam_name_ + "/image_cropped", 3);
+  }
 	
   ros_exposure_pub_ = nh.advertise<ueye_cam::Exposure>("master_exposure", 1);
 
@@ -230,10 +234,9 @@ void UEyeCamNodelet::onInit() {
       "Mirror Image Upside Down:\t" << cam_params_.flip_upd << endl <<
       "Mirror Image Left Right:\t" << cam_params_.flip_lr << endl <<
       "Do camera px4 hardware sync:\t" << cam_params_.do_imu_sync << endl <<
-      "Do adaptive exposure: \t" << cam_params_.adaptive_exposure_mode_ << endl
+      "Do adaptive exposure: \t" << cam_params_.adaptive_exposure_mode_ << endl <<
+      "crop_image: " << cam_params_.crop_image << endl
   );
-	
-  adaptive_exposure_ms_ = 0.0;
 };
 
 
@@ -498,6 +501,13 @@ INT UEyeCamNodelet::parseROSParams(ros::NodeHandle& local_nh) {
   if (local_nh.hasParam("flip_lr")) {
     local_nh.getParam("flip_lr", cam_params_.flip_lr);
     if (cam_params_.flip_lr != prevCamParams.flip_lr) {
+      hasNewParams = true;
+    }
+  }
+
+  if (local_nh.hasParam("crop_image")) {
+    local_nh.getParam("crop_image", cam_params_.crop_image);
+    if (cam_params_.crop_image != prevCamParams.crop_image) {
       hasNewParams = true;
     }
   }
@@ -983,6 +993,7 @@ void UEyeCamNodelet::frameGrabLoop() {
   int currNumSubscribers = 0;
   int prevNumSubscribers_cropped = 0;
   int currNumSubscribers_cropped = 0;
+  
   bool do_imu_sync_monitor = cam_params_.do_imu_sync;
 //try{
   while (frame_grab_alive_ && ros::ok()) {
@@ -996,7 +1007,7 @@ void UEyeCamNodelet::frameGrabLoop() {
     // and stop live video mode if ROS image topic no longer has any subscribers
     if (!cam_params_.do_imu_sync) {
     	currNumSubscribers = ros_cam_pub_.getNumSubscribers();
-      currNumSubscribers_cropped = ros_cropped_pub_.getNumSubscribers();
+      if (cam_params_.crop_image) currNumSubscribers_cropped = ros_cropped_pub_.getNumSubscribers();
       
     	if ((currNumSubscribers > 0 && prevNumSubscribers <= 0) ||
         (currNumSubscribers_cropped > 0 && prevNumSubscribers_cropped <= 0)) {
@@ -1215,11 +1226,9 @@ void UEyeCamNodelet::frameGrabLoop() {
 		
         	ros_cam_pub_.publish(img_msg_ptr, cam_info_msg_ptr);
           // Publish Cropped images
-          publishCroppedImage(*img_msg_ptr);
+          if (cam_params_.crop_image) publishCroppedImage(*img_msg_ptr);
 	}
-	
-	// compute optimal params for next image frame (in any case)
-	optimizeCaptureParams();
+
 
       }// end if (processNextFrame(eventTimeout) != NULL)
     } else {
@@ -1466,9 +1475,12 @@ unsigned int UEyeCamNodelet::stampAndPublishImage(unsigned int index)
 		//NODELET_INFO_STREAM("trigger time nsec: " << timestamp_buffer_.at(timestamp_index).frame_stamp << " cam time nsec: " << image.header.stamp);
 		// Publish image in ROS
 		ros_cam_pub_.publish(image, cinfo);
+
+    // compute optimal params for next image frame (in any case)
+    optimizeCaptureParams(image);
 		
 		// Publish Cropped images
-		publishCroppedImage(image);
+		if (cam_params_.crop_image) publishCroppedImage(image);
 
 		//INFO_STREAM("image_buffer size: " << image_buffer_.size() << ", cinfo_buffer size: " << cinfo_buffer_.size() << ", timestamp_buffer size: " << timestamp_buffer_.size());
 		// Erase published images and used timestamp from buffer
@@ -1567,7 +1579,7 @@ void UEyeCamNodelet::publishCroppedImage(const sensor_msgs::Image& frame)
 };
 
 
-void UEyeCamNodelet::optimizeCaptureParams()
+void UEyeCamNodelet::optimizeCaptureParams(sensor_msgs::Image image)
 {
 	
 	if(cam_params_.adaptive_exposure_mode_ == 2 && (ros_frame_count_ % 5 == 0) ) {
@@ -1578,7 +1590,16 @@ void UEyeCamNodelet::optimizeCaptureParams()
 		const float *histRange = { range };
 		cv::Mat hist ;
 
-		cv::calcHist(&frame_cropped_, 1, 0, cv::Mat(), hist, 1, &histSize, &histRange, true, false);
+    cv_bridge::CvImagePtr cv_ptr;
+    try {
+      cv_ptr = cv_bridge::toCvCopy(image, sensor_msgs::image_encodings::MONO8);
+
+    } catch (cv_bridge::Exception &e) {
+      NODELET_ERROR("cv_bridge exception: %s", e.what());
+      return;
+    }
+
+		cv::calcHist(&cv_ptr->image, 1, 0, cv::Mat(), hist, 1, &histSize, &histRange, true, false);
 		cv::normalize(hist, hist, 1.0 , 0, cv::NORM_L1); // TODO : check normalization
 
 		double j = 0, k = 0;

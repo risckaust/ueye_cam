@@ -213,7 +213,7 @@ protected:
   /**
    * Exposure controller XXX TODO MAKE IT ZERO-COPY
    */
-  void optimizeCaptureParams();
+  void optimizeCaptureParams(sensor_msgs::Image image);
 
   /**
    * Returns image's timestamp based on device's internal clock or current wall time if driver call fails.

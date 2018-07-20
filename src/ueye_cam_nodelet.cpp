@@ -156,6 +156,7 @@ void UEyeCamNodelet::onInit() {
       "; setting to ANY_CAMERA");
     cam_id_ = ANY_CAMERA;
   }
+  local_nh.param<bool>("crop_image", cam_params_.crop_image, false);
 
   loadIntrinsicsFile();
 
@@ -1570,7 +1571,7 @@ void UEyeCamNodelet::publishCroppedImage(const sensor_msgs::Image& frame)
 	// crop
 	float image_size_width = 752;
 	float image_size_height = 480; 
-	frame_cropped_ = cv_ptr->image(cv::Rect ((1280-image_size_width)/2, (1024-image_size_height)/2, image_size_width, image_size_height));
+	frame_cropped_ = cv_ptr->image(cv::Rect ((cam_params_.image_width-image_size_width)/2, (cam_params_.image_height-image_size_height)/2, image_size_width, image_size_height));
 
 	// Publish cropped image
 	sensor_msgs::ImagePtr image_msg = cv_bridge::CvImage(frame.header, frame.encoding, frame_cropped_).toImageMsg();

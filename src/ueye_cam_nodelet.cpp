@@ -117,12 +117,7 @@ UEyeCamNodelet::UEyeCamNodelet():
   cam_params_.flash_duration = DEFAULT_FLASH_DURATION;
   cam_params_.flip_upd = false;
   cam_params_.flip_lr = false;
-  cam_params_.do_imu_sync = true;
-  cam_params_.adaptive_exposure_mode_ = 2;
-  cam_params_.crop_image = false;
-  sync_buffer_size_ = 100;
-  adaptive_exposure_ms_ = 0.001;
-};
+}
 
 
 UEyeCamNodelet::~UEyeCamNodelet() {
@@ -135,7 +130,7 @@ UEyeCamNodelet::~UEyeCamNodelet() {
   //  delete ros_cfg_;
   //  ros_cfg_ = NULL;
   //}
-};
+}
 
 
 void UEyeCamNodelet::onInit() {
@@ -152,11 +147,10 @@ void UEyeCamNodelet::onInit() {
   local_nh.param<int>("camera_id", cam_id_, ANY_CAMERA);
   local_nh.param<string>("camera_parameters_file", cam_params_filename_, "");
   if (cam_id_ < 0) {
-    NODELET_WARN_STREAM("Invalid camera ID specified: " << cam_id_ <<
+    WARN_STREAM("Invalid camera ID specified: " << cam_id_ <<
       "; setting to ANY_CAMERA");
     cam_id_ = ANY_CAMERA;
   }
-  local_nh.param<bool>("crop_image", cam_params_.crop_image, false);
 
   loadIntrinsicsFile();
 
@@ -166,46 +160,22 @@ void UEyeCamNodelet::onInit() {
   f = bind(&UEyeCamNodelet::configCallback, this, _1, _2);
 
   // Setup publishers, subscribers, and services
-  ros_cam_pub_ = it.advertiseCamera(cam_name_ + "/" + cam_topic_, 3);
+  ros_cam_pub_ = it.advertiseCamera(cam_name_ + "/" + cam_topic_, 1);
   set_cam_info_srv_ = nh.advertiseService(cam_name_ + "/set_camera_info",
       &UEyeCamNodelet::setCamInfo, this);
   timeout_pub_ = nh.advertise<std_msgs::UInt64>(cam_name_ + "/" + timeout_topic_, 1, true);
   std_msgs::UInt64 timeout_msg; timeout_msg.data = 0; timeout_pub_.publish(timeout_msg);
 
-  // For IMU sync
-  ros_rect_pub_ = it.advertise(cam_name_ + "/image_rect", 100); // TODO : not hardcode name
-  
-  if (cam_params_.crop_image) {
-    ros_cropped_pub_ = it.advertise(cam_name_ + "/image_cropped", 3);
+  // Initiate camera and start capture
+  if (connectCam() != IS_SUCCESS) {
+    ERROR_STREAM("Failed to initialize [" << cam_name_ << "]");
+    return;
   }
-	
-  ros_exposure_pub_ = nh.advertise<ueye_cam::Exposure>("master_exposure", 1);
-
-  ros_timestamp_sub_ = nh.subscribe("mavros/cam_imu_sync/cam_imu_stamp", 1,
-					  &UEyeCamNodelet::bufferTimestamp, this);
-  ros_exposure_sub_ = nh.subscribe("master_exposure", 1,
-					  &UEyeCamNodelet::setSlaveExposure, this);
-  trigger_ready_srv_ = nh.serviceClient<std_srvs::Trigger>(cam_name_ + "/trigger_ready");
-
-	// Initiate camera and start capture
-	if (connectCam() != IS_SUCCESS) {
-		NODELET_ERROR_STREAM("Failed to initialize UEye camera '" << cam_name_ << "'");
-		return;
-	}
-	if (setStandbyMode() != IS_SUCCESS) {
-		NODELET_ERROR_STREAM("Shutting down UEye camera interface at initialization...");
-		ros::shutdown();
-		return;
-	}
-	NODELET_INFO_STREAM("Camera " << cam_name_ << " Initialised at standby mode");
 
   ros_cfg_->setCallback(f); // this will call configCallback, which will configure the camera's parameters
-
-  // Start IMU-camera trigger
   startFrameGrabber();
-
-  NODELET_INFO_STREAM(
-      "UEye camera '" << cam_name_ << "' initialized on topic " << ros_cam_pub_.getTopic() << endl <<
+  INFO_STREAM(
+      "UEye camera [" << cam_name_ << "] initialized on topic " << ros_cam_pub_.getTopic() << endl <<
       "Width:\t\t\t" << cam_params_.image_width << endl <<
       "Height:\t\t\t" << cam_params_.image_height << endl <<
       "Left Pos.:\t\t" << cam_params_.image_left << endl <<
@@ -233,12 +203,9 @@ void UEyeCamNodelet::onInit() {
       "Output Rate (Hz):\t" << cam_params_.output_rate << endl <<
       "Pixel Clock (MHz):\t" << cam_params_.pixel_clock << endl <<
       "Mirror Image Upside Down:\t" << cam_params_.flip_upd << endl <<
-      "Mirror Image Left Right:\t" << cam_params_.flip_lr << endl <<
-      "Do camera px4 hardware sync:\t" << cam_params_.do_imu_sync << endl <<
-      "Do adaptive exposure: \t" << cam_params_.adaptive_exposure_mode_ << endl <<
-      "crop_image: " << cam_params_.crop_image << endl
-  );
-};
+      "Mirror Image Left Right:\t" << cam_params_.flip_lr << endl
+      );
+}
 
 
 INT UEyeCamNodelet::parseROSParams(ros::NodeHandle& local_nh) {
@@ -250,7 +217,8 @@ INT UEyeCamNodelet::parseROSParams(ros::NodeHandle& local_nh) {
     local_nh.getParam("image_width", cam_params_.image_width);
     if (cam_params_.image_width != prevCamParams.image_width) {
       if (cam_params_.image_width <= 0) {
-        NODELET_WARN_STREAM("Invalid requested image width: " << cam_params_.image_width <<
+        WARN_STREAM("Invalid requested image width for [" << cam_name_ <<
+          "]: " << cam_params_.image_width <<
           "; using current width: " << prevCamParams.image_width);
         cam_params_.image_width = prevCamParams.image_width;
       } else {
@@ -262,7 +230,8 @@ INT UEyeCamNodelet::parseROSParams(ros::NodeHandle& local_nh) {
     local_nh.getParam("image_height", cam_params_.image_height);
     if (cam_params_.image_height != prevCamParams.image_height) {
       if (cam_params_.image_height <= 0) {
-        NODELET_WARN_STREAM("Invalid requested image height: " << cam_params_.image_height <<
+        WARN_STREAM("Invalid requested image height for [" << cam_name_ <<
+          "]: " << cam_params_.image_height <<
           "; using current height: " << prevCamParams.image_height);
         cam_params_.image_height = prevCamParams.image_height;
       } else {
@@ -290,7 +259,6 @@ INT UEyeCamNodelet::parseROSParams(ros::NodeHandle& local_nh) {
             cam_params_.color_mode.end(),
             cam_params_.color_mode.begin(),
             ::tolower);
-
         if (name2colormode(cam_params_.color_mode) != 0) {
           hasNewParams = true;
         } else {
@@ -312,8 +280,9 @@ INT UEyeCamNodelet::parseROSParams(ros::NodeHandle& local_nh) {
           cam_params_.subsampling == 4 ||
           cam_params_.subsampling == 8 ||
           cam_params_.subsampling == 16)) {
-        NODELET_WARN_STREAM("Invalid or unsupported requested subsampling rate: " << cam_params_.subsampling <<
-            "; using current rate: " << prevCamParams.subsampling);
+        WARN_STREAM("Invalid or unsupported requested subsampling rate for [" <<
+          cam_name_ << "]: " << cam_params_.subsampling <<
+          "; using current rate: " << prevCamParams.subsampling);
         cam_params_.subsampling = prevCamParams.subsampling;
       } else {
         hasNewParams = true;
@@ -330,8 +299,8 @@ INT UEyeCamNodelet::parseROSParams(ros::NodeHandle& local_nh) {
     local_nh.getParam("master_gain", cam_params_.master_gain);
     if (cam_params_.master_gain != prevCamParams.master_gain) {
       if (cam_params_.master_gain < 0 || cam_params_.master_gain > 100) {
-        NODELET_WARN_STREAM("Invalid master gain: " << cam_params_.master_gain <<
-            "; using current master gain: " << prevCamParams.master_gain);
+        WARN_STREAM("Invalid master gain for [" << cam_name_ << "]: " <<
+          cam_params_.master_gain << "; using current master gain: " << prevCamParams.master_gain);
         cam_params_.master_gain = prevCamParams.master_gain;
       } else {
         hasNewParams = true;
@@ -342,8 +311,8 @@ INT UEyeCamNodelet::parseROSParams(ros::NodeHandle& local_nh) {
     local_nh.getParam("red_gain", cam_params_.red_gain);
     if (cam_params_.red_gain != prevCamParams.red_gain) {
       if (cam_params_.red_gain < 0 || cam_params_.red_gain > 100) {
-        NODELET_WARN_STREAM("Invalid red gain: " << cam_params_.red_gain <<
-            "; using current red gain: " << prevCamParams.red_gain);
+        WARN_STREAM("Invalid red gain for [" << cam_name_ << "]: " <<
+          cam_params_.red_gain << "; using current red gain: " << prevCamParams.red_gain);
         cam_params_.red_gain = prevCamParams.red_gain;
       } else {
         hasNewParams = true;
@@ -354,8 +323,8 @@ INT UEyeCamNodelet::parseROSParams(ros::NodeHandle& local_nh) {
     local_nh.getParam("green_gain", cam_params_.green_gain);
     if (cam_params_.green_gain != prevCamParams.green_gain) {
       if (cam_params_.green_gain < 0 || cam_params_.green_gain > 100) {
-        NODELET_WARN_STREAM("Invalid green gain: " << cam_params_.green_gain <<
-            "; using current green gain: " << prevCamParams.green_gain);
+        WARN_STREAM("Invalid green gain for [" << cam_name_ << "]: " <<
+          cam_params_.green_gain << "; using current green gain: " << prevCamParams.green_gain);
         cam_params_.green_gain = prevCamParams.green_gain;
       } else {
         hasNewParams = true;
@@ -366,8 +335,8 @@ INT UEyeCamNodelet::parseROSParams(ros::NodeHandle& local_nh) {
     local_nh.getParam("blue_gain", cam_params_.blue_gain);
     if (cam_params_.blue_gain != prevCamParams.blue_gain) {
       if (cam_params_.blue_gain < 0 || cam_params_.blue_gain > 100) {
-        NODELET_WARN_STREAM("Invalid blue gain: " << cam_params_.blue_gain <<
-            "; using current blue gain: " << prevCamParams.blue_gain);
+        WARN_STREAM("Invalid blue gain for [" << cam_name_ << "]: " <<
+          cam_params_.blue_gain << "; using current blue gain: " << prevCamParams.blue_gain);
         cam_params_.blue_gain = prevCamParams.blue_gain;
       } else {
         hasNewParams = true;
@@ -390,7 +359,7 @@ INT UEyeCamNodelet::parseROSParams(ros::NodeHandle& local_nh) {
     local_nh.getParam("exposure", cam_params_.exposure);
     if (cam_params_.exposure != prevCamParams.exposure) {
       if (cam_params_.exposure < 0.0) {
-        NODELET_WARN_STREAM("Invalid requested exposure: " << cam_params_.exposure <<
+        WARN_STREAM("Invalid requested exposure: " << cam_params_.exposure <<
           "; using current exposure: " << prevCamParams.exposure);
         cam_params_.exposure = prevCamParams.exposure;
       } else {
@@ -408,8 +377,9 @@ INT UEyeCamNodelet::parseROSParams(ros::NodeHandle& local_nh) {
     local_nh.getParam("white_balance_red_offset", cam_params_.white_balance_red_offset);
     if (cam_params_.white_balance_red_offset != prevCamParams.white_balance_red_offset) {
       if (cam_params_.white_balance_red_offset < -50 || cam_params_.white_balance_red_offset > 50) {
-        NODELET_WARN_STREAM("Invalid white balance red offset: " << cam_params_.white_balance_red_offset <<
-            "; using current white balance red offset: " << prevCamParams.white_balance_red_offset);
+        WARN_STREAM("Invalid white balance red offset for [" << cam_name_ << "]: " <<
+          cam_params_.white_balance_red_offset <<
+          "; using current white balance red offset: " << prevCamParams.white_balance_red_offset);
         cam_params_.white_balance_red_offset = prevCamParams.white_balance_red_offset;
       } else {
         hasNewParams = true;
@@ -420,8 +390,9 @@ INT UEyeCamNodelet::parseROSParams(ros::NodeHandle& local_nh) {
     local_nh.getParam("white_balance_blue_offset", cam_params_.white_balance_blue_offset);
     if (cam_params_.white_balance_blue_offset != prevCamParams.white_balance_blue_offset) {
       if (cam_params_.white_balance_blue_offset < -50 || cam_params_.white_balance_blue_offset > 50) {
-        NODELET_WARN_STREAM("Invalid white balance blue offset: " << cam_params_.white_balance_blue_offset <<
-            "; using current white balance blue offset: " << prevCamParams.white_balance_blue_offset);
+        WARN_STREAM("Invalid white balance blue offset for [" << cam_name_ << "]: " <<
+          cam_params_.white_balance_blue_offset <<
+          "; using current white balance blue offset: " << prevCamParams.white_balance_blue_offset);
         cam_params_.white_balance_blue_offset = prevCamParams.white_balance_blue_offset;
       } else {
         hasNewParams = true;
@@ -443,8 +414,9 @@ INT UEyeCamNodelet::parseROSParams(ros::NodeHandle& local_nh) {
   if (local_nh.hasParam("flash_duration")) {
     local_nh.getParam("flash_duration", cam_params_.flash_duration);
     if (cam_params_.flash_duration < 0) {
-      NODELET_WARN_STREAM("Invalid flash duration: " << cam_params_.flash_duration <<
-          "; using current flash duration: " << prevCamParams.flash_duration);
+      WARN_STREAM("Invalid flash duration for [" << cam_name_ << "]: " <<
+        cam_params_.flash_duration <<
+        "; using current flash duration: " << prevCamParams.flash_duration);
       cam_params_.flash_duration = prevCamParams.flash_duration;
     }
     // NOTE: no need to set any parameters, since flash duration comes into
@@ -461,7 +433,8 @@ INT UEyeCamNodelet::parseROSParams(ros::NodeHandle& local_nh) {
     local_nh.getParam("frame_rate", cam_params_.frame_rate);
     if (cam_params_.frame_rate != prevCamParams.frame_rate) {
       if (cam_params_.frame_rate <= 0.0) {
-        NODELET_WARN_STREAM("Invalid requested frame rate: " << cam_params_.frame_rate <<
+        WARN_STREAM("Invalid requested frame rate for [" << cam_name_ << "]: " <<
+          cam_params_.frame_rate <<
           "; using current frame rate: " << prevCamParams.frame_rate);
         cam_params_.frame_rate = prevCamParams.frame_rate;
       } else {
@@ -485,7 +458,8 @@ INT UEyeCamNodelet::parseROSParams(ros::NodeHandle& local_nh) {
     local_nh.getParam("pixel_clock", cam_params_.pixel_clock);
     if (cam_params_.pixel_clock != prevCamParams.pixel_clock) {
       if (cam_params_.pixel_clock < 0) {
-        NODELET_WARN_STREAM("Invalid requested pixel clock: " << cam_params_.pixel_clock <<
+        WARN_STREAM("Invalid requested pixel clock for [" << cam_name_ << "]: " <<
+          cam_params_.pixel_clock <<
           "; using current pixel clock: " << prevCamParams.pixel_clock);
         cam_params_.pixel_clock = prevCamParams.pixel_clock;
       } else {
@@ -502,13 +476,6 @@ INT UEyeCamNodelet::parseROSParams(ros::NodeHandle& local_nh) {
   if (local_nh.hasParam("flip_lr")) {
     local_nh.getParam("flip_lr", cam_params_.flip_lr);
     if (cam_params_.flip_lr != prevCamParams.flip_lr) {
-      hasNewParams = true;
-    }
-  }
-
-  if (local_nh.hasParam("crop_image")) {
-    local_nh.getParam("crop_image", cam_params_.crop_image);
-    if (cam_params_.crop_image != prevCamParams.crop_image) {
       hasNewParams = true;
     }
   }
@@ -537,23 +504,27 @@ INT UEyeCamNodelet::parseROSParams(ros::NodeHandle& local_nh) {
     }
 
     // Configure camera sensor parameters
+    // NOTE: failing to configure certain parameters may or may not cause camera to fail;
+    //       cuurently their failures are treated as non-critical
+    //#define noop return is_err
+    #define noop (void)0
     if ((is_err = setGain(cam_params_.auto_gain, cam_params_.master_gain,
         cam_params_.red_gain, cam_params_.green_gain,
-        cam_params_.blue_gain, cam_params_.gain_boost)) != IS_SUCCESS) return is_err;
+        cam_params_.blue_gain, cam_params_.gain_boost)) != IS_SUCCESS) noop;
     if ((is_err = setPixelClockRate(cam_params_.pixel_clock)) != IS_SUCCESS) return is_err;
     if ((is_err = setFrameRate(cam_params_.auto_frame_rate, cam_params_.frame_rate)) != IS_SUCCESS) return is_err;
-    if ((is_err = setExposure(cam_params_.auto_exposure, cam_params_.exposure)) != IS_SUCCESS) return is_err;
+    if ((is_err = setExposure(cam_params_.auto_exposure, cam_params_.exposure)) != IS_SUCCESS) noop;
     if ((is_err = setWhiteBalance(cam_params_.auto_white_balance, cam_params_.white_balance_red_offset,
-      cam_params_.white_balance_blue_offset)) != IS_SUCCESS) return is_err;
-
-    if ((is_err = setMirrorUpsideDown(cam_params_.flip_upd)) != IS_SUCCESS) return is_err;
-    if ((is_err = setMirrorLeftRight(cam_params_.flip_lr)) != IS_SUCCESS) return is_err;
+      cam_params_.white_balance_blue_offset)) != IS_SUCCESS) noop;
+    if ((is_err = setMirrorUpsideDown(cam_params_.flip_upd)) != IS_SUCCESS) noop;
+    if ((is_err = setMirrorLeftRight(cam_params_.flip_lr)) != IS_SUCCESS) noop;
+    #undef noop
   }
 
   DEBUG_STREAM("Successfully applied settings from ROS params to [" << cam_name_ << "]");
 
   return is_err;
-};
+}
 
 
 void UEyeCamNodelet::configCallback(ueye_cam::UEyeCamConfig& config, uint32_t level) {
@@ -586,7 +557,7 @@ void UEyeCamNodelet::configCallback(ueye_cam::UEyeCamConfig& config, uint32_t le
       config.image_left = cam_params_.image_left;
       config.image_top = cam_params_.image_top;
       if (setResolution(config.image_width, config.image_height,
-          config.image_left, config.image_top) != IS_SUCCESS) return;
+          config.image_left, config.image_top, false) != IS_SUCCESS) return;
     }
   }
 
@@ -605,21 +576,12 @@ void UEyeCamNodelet::configCallback(ueye_cam::UEyeCamConfig& config, uint32_t le
     if (setSensorScaling(config.sensor_scaling, false) != IS_SUCCESS) return;
   }
 
+  // Reallocate internal camera buffer, and synchronize both non-ROS and ROS settings
+  // for redundancy
   if (needToReallocateBuffer) {
-    if (reallocateCamBuffer() != IS_SUCCESS) return;
+    if (syncCamConfig() != IS_SUCCESS) return;
     needToReallocateBuffer = false;
   }
-
-  // (Re-)populate ROS image message
-  // NOTE: the non-ROS UEye parameters and buffers have been updated by setColorMode(),
-  // setResolution(), setSubsampling(), setBinning(), and setSensorScaling()
-  ros_image_.header.frame_id = "/" + frame_name_;
-  ros_image_.height = config.image_height / (config.sensor_scaling * config.subsampling * config.binning);
-  ros_image_.width = config.image_width / (config.sensor_scaling * config.subsampling * config.binning);
-  ros_image_.encoding = config.color_mode;
-  ros_image_.step = cam_buffer_pitch_;
-  ros_image_.is_bigendian = 0;
-  ros_image_.data.resize(cam_buffer_size_);
 
   // Check for mutual exclusivity among requested sensor parameters
   if (!config.auto_exposure) { // Auto frame rate requires auto shutter
@@ -675,33 +637,7 @@ void UEyeCamNodelet::configCallback(ueye_cam::UEyeCamConfig& config, uint32_t le
       config.exposure != cam_params_.exposure) {
     if (setExposure(config.auto_exposure, config.exposure) != IS_SUCCESS) return;
   }
-  
-  // MINE reconfig to LOCK EXPOSURE!!!!!!!!!!!!!!!!!!!!!!!!!!
-  /*bool autoExposureToSet = !config.lock_exposure;
-  double instantExposure;
-  if (is_Exposure(cam_handle_, IS_EXPOSURE_CMD_GET_EXPOSURE, &instantExposure, sizeof(instantExposure)) != IS_SUCCESS) {
-    std::cout<< "Failed to query exposure timing for UEye camera" <<std::endl;
-    return;
-  }
-  if (config.lock_exposure) {
-    // To lock the camera exposure
-    if (setExposure(autoExposureToSet, instantExposure) != IS_SUCCESS) {
-      std::cout<< "Failed to LOCK exposure for UEye camera" <<std::endl;
-      return;
-    } else {
-      std::cout<< "Locked exposure to" << instantExposure << std::endl;
-    }
-  } else {
-    // To Unlock camera exposure
-    if (setExposure(autoExposureToSet, instantExposure) != IS_SUCCESS) {
-      std::cout<< "Failed to UNlock exposure for UEye camera" <<std::endl;
-      return;
-    } else {
-      std::cout<< "unLocked exposure to" << instantExposure << std::endl;
-    }
-  }*/
-  //!!!!!!!!!!!!!!!!!!!!!!!
-  
+
   if (config.auto_white_balance != cam_params_.auto_white_balance ||
       config.white_balance_red_offset != cam_params_.white_balance_red_offset ||
       config.white_balance_blue_offset != cam_params_.white_balance_blue_offset) {
@@ -730,7 +666,7 @@ void UEyeCamNodelet::configCallback(ueye_cam::UEyeCamConfig& config, uint32_t le
     config.flash_delay = flash_delay;
     config.flash_duration = flash_duration;
   }
-  
+
   // Update local copy of parameter set to newly updated set
   cam_params_ = config;
 
@@ -769,7 +705,7 @@ INT UEyeCamNodelet::syncCamConfig(string dft_mode_str) {
   //cfg_sync_requested_ = true; // WARNING: assume that dyncfg client may want to override current settings
 
   // (Re-)populate ROS image message
-  ros_image_.header.frame_id = "/" + frame_name_;
+  ros_image_.header.frame_id = frame_name_;
   // NOTE: .height, .width, .encoding, .step and .data determined in fillImgMsg();
   //       .is_bigendian determined in constructor
 
@@ -790,7 +726,7 @@ INT UEyeCamNodelet::queryCamParams() {
       IS_GET_ENABLE_AUTO_SENSOR_GAIN, &pval1, &pval2)) != IS_SUCCESS &&
       (is_err = is_SetAutoParameter(cam_handle_,
           IS_GET_ENABLE_AUTO_GAIN, &pval1, &pval2)) != IS_SUCCESS) {
-    NODELET_ERROR_STREAM("Failed to query auto gain mode for UEye camera '" <<
+    ERROR_STREAM("Failed to query auto gain mode for UEye camera '" <<
         cam_name_ << "' (" << err2str(is_err) << ")");
     return is_err;
   }
@@ -813,8 +749,8 @@ INT UEyeCamNodelet::queryCamParams() {
     } else if (query == IS_SET_GAINBOOST_OFF) {
       cam_params_.gain_boost = false;
     } else {
-      NODELET_ERROR_STREAM("Failed to query gain boost for UEye camera '" <<
-          cam_name_ << "' (" << err2str(query) << ")");
+      ERROR_STREAM("Failed to query gain boost for [" << cam_name_ <<
+        "] (" << err2str(query) << ")");
       return query;
     }
   } else {
@@ -825,16 +761,16 @@ INT UEyeCamNodelet::queryCamParams() {
       IS_GET_ENABLE_AUTO_SENSOR_SHUTTER, &pval1, &pval2)) != IS_SUCCESS &&
       (is_err = is_SetAutoParameter(cam_handle_,
           IS_GET_ENABLE_AUTO_SHUTTER, &pval1, &pval2)) != IS_SUCCESS) {
-    NODELET_ERROR_STREAM("Failed to query auto shutter mode for UEye camera '" <<
-        cam_name_ << "' (" << err2str(is_err) << ")");
+    ERROR_STREAM("Failed to query auto shutter mode for [" << cam_name_ <<
+      "] (" << err2str(is_err) << ")");
     return is_err;
   }
   cam_params_.auto_exposure = (pval1 != 0);
 
   if ((is_err = is_Exposure(cam_handle_, IS_EXPOSURE_CMD_GET_EXPOSURE,
       &cam_params_.exposure, sizeof(cam_params_.exposure))) != IS_SUCCESS) {
-    NODELET_ERROR_STREAM("Failed to query exposure timing for UEye camera '" <<
-        cam_name_ << "' (" << err2str(is_err) << ")");
+    ERROR_STREAM("Failed to query exposure timing for [" << cam_name_ <<
+      "] (" << err2str(is_err) << ")");
     return is_err;
   }
 
@@ -842,16 +778,16 @@ INT UEyeCamNodelet::queryCamParams() {
       IS_GET_ENABLE_AUTO_SENSOR_WHITEBALANCE, &pval1, &pval2)) != IS_SUCCESS &&
       (is_err = is_SetAutoParameter(cam_handle_,
           IS_GET_ENABLE_AUTO_WHITEBALANCE, &pval1, &pval2)) != IS_SUCCESS) {
-    NODELET_ERROR_STREAM("Failed to query auto white balance mode for UEye camera '" <<
-        cam_name_ << "' (" << err2str(is_err) << ")");
+    ERROR_STREAM("Failed to query auto white balance mode for [" << cam_name_ <<
+      "] (" << err2str(is_err) << ")");
     return is_err;
   }
   cam_params_.auto_white_balance = (pval1 != 0);
 
   if ((is_err = is_SetAutoParameter(cam_handle_,
       IS_GET_AUTO_WB_OFFSET, &pval1, &pval2)) != IS_SUCCESS) {
-    NODELET_ERROR_STREAM("Failed to query auto white balance red/blue channel offsets for UEye camera '" <<
-        cam_name_ << "' (" << err2str(is_err) << ")");
+    ERROR_STREAM("Failed to query auto white balance red/blue channel offsets for [" <<
+      cam_name_ << "] (" << err2str(is_err) << ")");
     return is_err;
   }
   cam_params_.white_balance_red_offset = pval1;
@@ -860,8 +796,8 @@ INT UEyeCamNodelet::queryCamParams() {
   IO_FLASH_PARAMS currFlashParams;
   if ((is_err = is_IO(cam_handle_, IS_IO_CMD_FLASH_GET_PARAMS,
       (void*) &currFlashParams, sizeof(IO_FLASH_PARAMS))) != IS_SUCCESS) {
-    ERROR_STREAM("Could not retrieve current flash parameter info for UEye camera '" <<
-        cam_name_ << "' (" << err2str(is_err) << ")");
+    ERROR_STREAM("Could not retrieve current flash parameter info for [" <<
+      cam_name_ << "] (" << err2str(is_err) << ")");
     return is_err;
   }
   cam_params_.flash_delay = currFlashParams.s32Delay;
@@ -871,23 +807,23 @@ INT UEyeCamNodelet::queryCamParams() {
       IS_GET_ENABLE_AUTO_SENSOR_FRAMERATE, &pval1, &pval2)) != IS_SUCCESS &&
       (is_err = is_SetAutoParameter(cam_handle_,
           IS_GET_ENABLE_AUTO_FRAMERATE, &pval1, &pval2)) != IS_SUCCESS) {
-    NODELET_ERROR_STREAM("Failed to query auto frame rate mode for UEye camera '" <<
-        cam_name_ << "' (" << err2str(is_err) << ")");
+    ERROR_STREAM("Failed to query auto frame rate mode for [" << cam_name_ <<
+      "] (" << err2str(is_err) << ")");
     return is_err;
   }
   cam_params_.auto_frame_rate = (pval1 != 0);
 
   if ((is_err = is_SetFrameRate(cam_handle_, IS_GET_FRAMERATE, &cam_params_.frame_rate)) != IS_SUCCESS) {
-    NODELET_ERROR_STREAM("Failed to query frame rate for UEye camera '" <<
-        cam_name_ << "' (" << err2str(is_err) << ")");
+    ERROR_STREAM("Failed to query frame rate for [" << cam_name_ <<
+      "] (" << err2str(is_err) << ")");
     return is_err;
   }
 
   UINT currPixelClock;
   if ((is_err = is_PixelClock(cam_handle_, IS_PIXELCLOCK_CMD_GET,
       (void*) &currPixelClock, sizeof(currPixelClock))) != IS_SUCCESS) {
-    NODELET_ERROR_STREAM("Failed to query pixel clock rate for UEye camera '" <<
-        cam_name_ << "' (" << err2str(is_err) << ")");
+    ERROR_STREAM("Failed to query pixel clock rate for [" << cam_name_ <<
+      "] (" << err2str(is_err) << ")");
     return is_err;
   }
   cam_params_.pixel_clock = currPixelClock;
@@ -896,14 +832,13 @@ INT UEyeCamNodelet::queryCamParams() {
   cam_params_.flip_upd = ((currROP & IS_SET_ROP_MIRROR_UPDOWN) == IS_SET_ROP_MIRROR_UPDOWN);
   cam_params_.flip_lr = ((currROP & IS_SET_ROP_MIRROR_LEFTRIGHT) == IS_SET_ROP_MIRROR_LEFTRIGHT);
 
-
   // NOTE: do not need to (re-)populate ROS image message, since assume that
   //       syncCamConfig() was previously called
 
   DEBUG_STREAM("Successfully queries parameters from [" << cam_name_ << "]");
 
   return is_err;
-};
+}
 
 
 INT UEyeCamNodelet::connectCam() {
@@ -915,7 +850,7 @@ INT UEyeCamNodelet::connectCam() {
   if (cam_params_filename_.length() <= 0) { // Use default filename
     cam_params_filename_ = string(getenv("HOME")) + "/.ros/camera_conf/" + cam_name_ + ".ini";
   }
-  loadCamConfig(cam_params_filename_);
+  if ((is_err = loadCamConfig(cam_params_filename_)) != IS_SUCCESS) return is_err;
 
   // Query existing configuration parameters from camera
   if ((is_err = queryCamParams()) != IS_SUCCESS) return is_err;
@@ -924,7 +859,7 @@ INT UEyeCamNodelet::connectCam() {
   if ((is_err = parseROSParams(getPrivateNodeHandle())) != IS_SUCCESS) return is_err;
 
   return IS_SUCCESS;
-};
+}
 
 
 INT UEyeCamNodelet::disconnectCam() {
@@ -936,17 +871,19 @@ INT UEyeCamNodelet::disconnectCam() {
   }
 
   return is_err;
-};
+}
 
 
 bool UEyeCamNodelet::setCamInfo(sensor_msgs::SetCameraInfo::Request& req,
     sensor_msgs::SetCameraInfo::Response& rsp) {
   ros_cam_info_ = req.camera_info;
-  ros_cam_info_.header.frame_id = "/" + frame_name_;
+  ros_cam_info_.header.frame_id = frame_name_;
   rsp.success = saveIntrinsicsFile();
-  rsp.status_message = (rsp.success) ? "successfully wrote to file" : "failed to write to file";
+  rsp.status_message = (rsp.success) ?
+    "successfully wrote camera info to file" :
+    "failed to write camera info to file";
   return true;
-};
+}
 
 
 void UEyeCamNodelet::frameGrabLoop() {
@@ -963,98 +900,58 @@ void UEyeCamNodelet::frameGrabLoop() {
   unsigned int grabbedFrameCount = 0;
 #endif
 
+  DEBUG_STREAM("Starting threaded frame grabber loop for [" << cam_name_ << "]");
+
   ros::Rate idleDelay(200);
 
-  // For IMU sync case: 
-  // Start capturing and set external trigger mode straight away!
-  if (cam_params_.do_imu_sync) {
-	// Reset reference time to prevent throttling first frame
-      	output_rate_mutex_.lock();
-      	init_publish_time_ = ros::Time(0);
-      	prev_output_frame_idx_ = 0;
-      	output_rate_mutex_.unlock();
-
-	cam_params_.ext_trigger_mode = 1; // force set ext_trigger_mode
-        if (setExtTriggerMode() != IS_SUCCESS) {
-        	NODELET_ERROR_STREAM("Shutting down UEye camera interface...");
-        	ros::shutdown();
-        	return;
-        }
-	
-        NODELET_INFO_STREAM("Camera " << cam_name_ << " set to external trigger mode");
-      	
-	sendTriggerReady();
-  }
-  
-  // set camera model for rectification
-  camera_model_.fromCameraInfo (ros_cam_info_);
-
-  // Grabbing loop
   int prevNumSubscribers = 0;
   int currNumSubscribers = 0;
-  int prevNumSubscribers_cropped = 0;
-  int currNumSubscribers_cropped = 0;
-  
-  bool do_imu_sync_monitor = cam_params_.do_imu_sync;
-//try{
   while (frame_grab_alive_ && ros::ok()) {
-    // check if do_imu_sync flag was changed on the go
-    if (do_imu_sync_monitor != cam_params_.do_imu_sync) 
-	NODELET_ERROR_STREAM("do_imu_sync cannot be changed on the go. Restart the camera!");
-    do_imu_sync_monitor = cam_params_.do_imu_sync;
-
-    // For normal operation withOUT imu sync
     // Initialize live video mode if camera was previously asleep, and ROS image topic has subscribers;
     // and stop live video mode if ROS image topic no longer has any subscribers
-    if (!cam_params_.do_imu_sync) {
-    	currNumSubscribers = ros_cam_pub_.getNumSubscribers();
-      if (cam_params_.crop_image) currNumSubscribers_cropped = ros_cropped_pub_.getNumSubscribers();
-      
-    	if ((currNumSubscribers > 0 && prevNumSubscribers <= 0) ||
-        (currNumSubscribers_cropped > 0 && prevNumSubscribers_cropped <= 0)) {
-      		// Reset reference time to prevent throttling first frame
-      		output_rate_mutex_.lock();
-      		init_publish_time_ = ros::Time(0);
-      		prev_output_frame_idx_ = 0;
-      		output_rate_mutex_.unlock();
+    currNumSubscribers = ros_cam_pub_.getNumSubscribers();
+    if (currNumSubscribers > 0 && prevNumSubscribers <= 0) {
+      // Reset reference time to prevent throttling first frame
+      output_rate_mutex_.lock();
+      init_publish_time_ = ros::Time(0);
+      prev_output_frame_idx_ = 0;
+      output_rate_mutex_.unlock();
 
-      		if (cam_params_.ext_trigger_mode) {
-        		if (setExtTriggerMode() != IS_SUCCESS) {
-          			NODELET_ERROR_STREAM("Shutting down UEye camera interface...");
-          			ros::shutdown();
-          			return;
-        		}
-        		NODELET_INFO_STREAM("Camera " << cam_name_ << " set to external trigger mode");
-      		} else {
-        		if (setFreeRunMode() != IS_SUCCESS) {
-          			ERROR_STREAM("Shutting down driver nodelet for [" << cam_name_ << "]");
-          			ros::shutdown();
-          			return;
-        		}
+      if (cam_params_.ext_trigger_mode) {
+        if (setExtTriggerMode() != IS_SUCCESS) {
+          ERROR_STREAM("Shutting down driver nodelet for [" << cam_name_ << "]");
+          ros::shutdown();
+          return;
+        }
+        INFO_STREAM("[" << cam_name_ << "] set to external trigger mode");
+      } else {
+        if (setFreeRunMode() != IS_SUCCESS) {
+          ERROR_STREAM("Shutting down driver nodelet for [" << cam_name_ << "]");
+          ros::shutdown();
+          return;
+        }
 
-        		// NOTE: need to copy flash parameters to local copies since
-        		//       cam_params_.flash_duration is type int, and also sizeof(int)
-        		//       may not equal to sizeof(INT) / sizeof(UINT)
-        		INT flash_delay = cam_params_.flash_delay;
-        		UINT flash_duration = cam_params_.flash_duration;
-        		setFlashParams(flash_delay, flash_duration);
-        		// Copy back actual flash parameter values that were set
-        		cam_params_.flash_delay = flash_delay;
-        		cam_params_.flash_duration = flash_duration;
+        // NOTE: need to copy flash parameters to local copies since
+        //       cam_params_.flash_duration is type int, and also sizeof(int)
+        //       may not equal to sizeof(INT) / sizeof(UINT)
+        INT flash_delay = cam_params_.flash_delay;
+        UINT flash_duration = cam_params_.flash_duration;
+        setFlashParams(flash_delay, flash_duration);
+        // Copy back actual flash parameter values that were set
+        cam_params_.flash_delay = flash_delay;
+        cam_params_.flash_duration = flash_duration;
 
-        		INFO_STREAM("[" << cam_name_ << "] set to free-run mode");
-      		}
-    	} else if (currNumSubscribers <= 0 && prevNumSubscribers > 0) {
-      		if (setStandbyMode() != IS_SUCCESS) {
-			NODELET_ERROR_STREAM("Shutting down UEye camera interface...");
-			ros::shutdown();
-			return;
-		}
-		NODELET_INFO_STREAM("Camera " << cam_name_ << " set to standby mode");
-	}
-    	prevNumSubscribers = currNumSubscribers;
-      prevNumSubscribers_cropped = currNumSubscribers_cropped;
+        INFO_STREAM("[" << cam_name_ << "] set to free-run mode");
+      }
+    } else if (currNumSubscribers <= 0 && prevNumSubscribers > 0) {
+      if (setStandbyMode() != IS_SUCCESS) {
+        ERROR_STREAM("Shutting down driver nodelet for [" << cam_name_ << "]");
+        ros::shutdown();
+        return;
+      }
+      INFO_STREAM("[" << cam_name_ << "] set to standby mode");
     }
+    prevNumSubscribers = currNumSubscribers;
 
     // Send updated dyncfg parameters if previously changed
     if (cfg_sync_requested_) {
@@ -1076,13 +973,10 @@ void UEyeCamNodelet::frameGrabLoop() {
     prevStartGrab = currStartGrab;
 #endif
 
-//_____________________________
-// start capturing 
     if (isCapturing()) {
       INT eventTimeout = (cam_params_.auto_frame_rate || cam_params_.ext_trigger_mode) ?
-          (INT) 2000 : (INT) (1000.0 / cam_params_.frame_rate * 1.9); // tide strick timeout to avoid skipping frame. 
+          (INT) 2000 : (INT) (1000.0 / cam_params_.frame_rate * 2);
       if (processNextFrame(eventTimeout) != NULL) {
-
         // Initialize shared pointers from member messages for nodelet intraprocess publishing
         sensor_msgs::ImagePtr img_msg_ptr(new sensor_msgs::Image(ros_image_));
         sensor_msgs::CameraInfoPtr cam_info_msg_ptr(new sensor_msgs::CameraInfo(ros_cam_info_));
@@ -1110,7 +1004,7 @@ void UEyeCamNodelet::frameGrabLoop() {
         prevGrabbedFrame = currGrabbedFrame;
 
         if (grabbedFrameCount > 1) {
-          ROS_WARN_STREAM("\nPre-Grab: " << startGrabSum/startGrabCount << " +/- " <<
+          WARN_STREAM("\nPre-Grab: " << startGrabSum/startGrabCount << " +/- " <<
               sqrt(startGrabSumSqrd/startGrabCount - (startGrabSum/startGrabCount)*(startGrabSum/startGrabCount)) << " ms (" <<
               1000.0*startGrabCount/startGrabSum << "Hz)\n" <<
               "Post-Grab: " << grabbedFrameSum/grabbedFrameCount << " +/- " <<
@@ -1143,95 +1037,17 @@ void UEyeCamNodelet::frameGrabLoop() {
 
         cam_info_msg_ptr->width = cam_params_.image_width / cam_sensor_scaling_rate_ / cam_binning_rate_;
         cam_info_msg_ptr->height = cam_params_.image_height / cam_sensor_scaling_rate_ / cam_binning_rate_;
-	
-	//_________________
+
         // Copy pixel content from internal frame buffer to ROS image
-	// For IMU sync
-	if (cam_params_.do_imu_sync) {
-		// TODO: 9 make ros_image_.data (std::vector) use cam_buffer_ (char*) as underlying buffer, without copy; alternatively after override reallocateCamBuffer() by allocating memory to ros_image_.data, and setting that as internal camera buffer with is_SetAllocatedImageMem (complication is that vector's buffer need to be mlock()-ed)
-		int expected_row_stride = cam_info_msg_ptr->width * bits_per_pixel_ / 8;
+        if (!fillMsgData(*img_msg_ptr)) continue;
 
-		if (cam_buffer_pitch_ < expected_row_stride) {
-			ERROR_STREAM("Camera buffer pitch (" << cam_buffer_pitch_ <<
-					") is smaller than expected for [" << cam_name_ << "]: " <<
-					"width (" << cam_info_msg_ptr->width << ") * bytes per pixel (" <<
-					bits_per_pixel_ / 8 << ") = " << expected_row_stride);
-			continue;
+        img_msg_ptr->header.seq = cam_info_msg_ptr->header.seq = ros_frame_count_++;
+        img_msg_ptr->header.frame_id = cam_info_msg_ptr->header.frame_id;
 
-		} else if (cam_buffer_pitch_ == expected_row_stride) {
-			// Content is contiguous, so copy out the entire buffer
-			output_rate_mutex_.lock();
-			copy((char *) cam_buffer_,
-			((char *) cam_buffer_) + cam_buffer_size_,
-			img_msg_ptr->data.begin());
-			output_rate_mutex_.unlock();
+        if (!frame_grab_alive_ || !ros::ok()) break;
 
-		} else { // cam_buffer_pitch_ > expected_row_stride
-			// Each row contains extra content according to cam_buffer_pitch_, so must copy out each row independently
-			output_rate_mutex_.lock();			
-			std::vector<unsigned char>::iterator ros_image_it = img_msg_ptr->data.begin();
-			char *cam_buffer_ptr = cam_buffer_;
-
-			for (unsigned int row = 0; row < cam_info_msg_ptr->height; row++) {
-				ros_image_it = copy(cam_buffer_ptr, cam_buffer_ptr + expected_row_stride, ros_image_it);
-				cam_buffer_ptr += expected_row_stride;
-			}
-
-			img_msg_ptr->step = expected_row_stride; // fix the row stepsize/stride value
-			output_rate_mutex_.unlock();
-		}
-
-		img_msg_ptr->header.seq = cam_info_msg_ptr->header.seq = ros_frame_count_; ros_frame_count_++;
-		img_msg_ptr->header.frame_id = cam_info_msg_ptr->header.frame_id;
-
-		if (!frame_grab_alive_ || !ros::ok()) { break; }
-
-
-		// buffer the image frame and camera info
-		output_rate_mutex_.lock();
-		image_buffer_.push_back(*img_msg_ptr);
-		cinfo_buffer_.push_back(*cam_info_msg_ptr);
-		output_rate_mutex_.unlock();
-		
-		buffer_mutex_.lock();
-		//adaptiveSync();		
-		if (image_buffer_.size() && timestamp_buffer_.size()) {
-						
-			unsigned int i;
-			//INFO_STREAM("image_buffer_ size: " << image_buffer_.size() << ", stamp_buffer_ size: " << timestamp_buffer_.size());
-			for (i = 0; i < image_buffer_.size() && timestamp_buffer_.size() > 0 ;) {
-				i += stampAndPublishImage(i);
-			}
-		}
-		buffer_mutex_.unlock();
-
-		// Check whether buffer has stale data and if so, throw away oldest
-		if (image_buffer_.size() > 100) {
-			image_buffer_.erase(image_buffer_.begin(), image_buffer_.begin()+50);
-			cinfo_buffer_.erase(cinfo_buffer_.begin(), cinfo_buffer_.begin()+50);
-			//ROS_ERROR_THROTTLE(1, "%i: Dropping image", cam_id_);
-			INFO_STREAM("[ " << cam_name_ << " ] Dropping half of the image buffer");
-		}
-
-	// For non sync cases
-	} else {
-        	if (!fillMsgData(*img_msg_ptr)) {
-			       ROS_INFO("Skip one image messge filled.");
-			       continue;
-		      }
-
-        	img_msg_ptr->header.seq = cam_info_msg_ptr->header.seq = ros_frame_count_++;
-        	img_msg_ptr->header.frame_id = cam_info_msg_ptr->header.frame_id;
-
-        	if (!frame_grab_alive_ || !ros::ok()) break;
-		
-        	ros_cam_pub_.publish(img_msg_ptr, cam_info_msg_ptr);
-          // Publish Cropped images
-          if (cam_params_.crop_image) publishCroppedImage(*img_msg_ptr);
-	}
-
-
-      }// end if (processNextFrame(eventTimeout) != NULL)
+        ros_cam_pub_.publish(img_msg_ptr, cam_info_msg_ptr);
+      }
     } else {
         init_ros_time_ = ros::Time(0);
         init_clock_tick_ = 0;
@@ -1241,9 +1057,6 @@ void UEyeCamNodelet::frameGrabLoop() {
     idleDelay.sleep();
   }
 
-//} catch (int e) {
-//    cout << "An exception occurred. Exception Nr. " << e << '\n';
-//}
   setStandbyMode();
   frame_grab_alive_ = false;
 
@@ -1254,7 +1067,7 @@ void UEyeCamNodelet::frameGrabLoop() {
 void UEyeCamNodelet::startFrameGrabber() {
   frame_grab_alive_ = true;
   frame_grab_thread_ = thread(bind(&UEyeCamNodelet::frameGrabLoop, this));
-};
+}
 
 
 void UEyeCamNodelet::stopFrameGrabber() {
@@ -1263,7 +1076,7 @@ void UEyeCamNodelet::stopFrameGrabber() {
     frame_grab_thread_.join();
   }
   frame_grab_thread_ = thread();
-};
+}
 
 const std::map<INT, std::string> UEyeCamNodelet::ENCODING_DICTIONARY = {
     { IS_CM_SENSOR_RAW8, sensor_msgs::image_encodings::BAYER_RGGB8 },
@@ -1335,16 +1148,16 @@ void UEyeCamNodelet::loadIntrinsicsFile() {
   }
 
   if (camera_calibration_parsers::readCalibration(cam_intr_filename_, cam_name_, ros_cam_info_)) {
-    NODELET_DEBUG_STREAM("Loaded intrinsics parameters for UEye camera " << cam_name_);
+    DEBUG_STREAM("Loaded intrinsics parameters for [" << cam_name_ << "]");
   }
-  ros_cam_info_.header.frame_id = "/" + frame_name_;
-};
+  ros_cam_info_.header.frame_id = frame_name_;
+}
 
 
 bool UEyeCamNodelet::saveIntrinsicsFile() {
   if (camera_calibration_parsers::writeCalibration(cam_intr_filename_, cam_name_, ros_cam_info_)) {
-    NODELET_DEBUG_STREAM("Saved intrinsics parameters for UEye camera " << cam_name_ <<
-        " to " << cam_intr_filename_);
+    DEBUG_STREAM("Saved intrinsics parameters for [" << cam_name_ <<
+      "] to " << cam_intr_filename_);
     return true;
   }
   return false;
@@ -1381,319 +1194,6 @@ void UEyeCamNodelet::handleTimeout() {
   timeout_pub_.publish(timeout_msg);
 };
 
-//-------------------------
-// For IMU sync
-void UEyeCamNodelet::setSlaveExposure(const ueye_cam::Exposure &msg)
-{
-	if(cam_params_.adaptive_exposure_mode_ == 1) { // accept exposure timing from master camera
-		// TODO : re-add check for sequence again
-		adaptive_exposure_ms_ = msg.exposure_ms;
-		bool auto_exposure = false;
-		if (setExposure(auto_exposure , adaptive_exposure_ms_) != IS_SUCCESS) {
-			ROS_ERROR("Slave adaptive exposure setting failed");
-		}
-	}
-
-};
-
-void UEyeCamNodelet::bufferTimestamp(const mavros_msgs::CamIMUStamp &msg)
-{
-	if(cam_params_.do_imu_sync) {
-		buffer_mutex_.lock();
-		timestamp_buffer_.push_back(msg);
-
-		// Check whether buffer has stale stamp and if so throw away oldest
-		if (timestamp_buffer_.size() > 100) {
-			timestamp_buffer_.erase(timestamp_buffer_.begin(), timestamp_buffer_.begin()+50);
-			//ROS_ERROR_THROTTLE(1, "Dropping timestamp");
-			INFO_STREAM("[ " << cam_name_ << " ] Dropping half of the timestamp buffer.");
-		}
-		buffer_mutex_.unlock();
-	}
-};
-
-void UEyeCamNodelet::sendTriggerReady()
-{
-	
-	acknTriggerCommander(); // call service: First ackn will STOP px4 triggering
-
-	// set stamp_buffer_offset_ from px4
-	ros::Duration(1).sleep(); // wait for timestamp callback from mavros
-	if (timestamp_buffer_.empty())	stamp_buffer_offset_ = 0;
-	else 				stamp_buffer_offset_ = 1 + (uint)(timestamp_buffer_.end()-1)->frame_seq_id;
-	stamp_buffer_offset_double_ = (double)stamp_buffer_offset_;
-
-	INFO_STREAM("Detected px4 starting stamp sequence will be: " << stamp_buffer_offset_);
-
-	timestamp_buffer_.clear(); // timestamp_buffer_ should have some elements already from px4 since it is in a different thread.
-	ros_frame_count_ = 0;
-	int i=0; 
-	while (processNextFrame(2000) != NULL) {i++;} // this should flush all the unused frame in the camera buffer
-	INFO_STREAM("Flashed " << i << " images from camera buffer prior to start!");
-	
-	acknTriggerCommander(); // call service: second ackn will RESTART px4 triggering
-};
-
-void UEyeCamNodelet::acknTriggerCommander()
-{
-	std_srvs::Trigger sig;
-	if (!trigger_ready_srv_.call(sig)) {
-		ROS_ERROR("Failed to call ready-for-trigger");
-	}
-};
-
-void UEyeCamNodelet::sendSlaveExposure()
-{
-	if(cam_params_.adaptive_exposure_mode_ == 2)
-	{
-		ueye_cam::Exposure msg;
-		msg.header.stamp = ros::Time::now();
-		//msg.header.seq = ros_frame_count_ + 1; // TODO : This won't work
-
-		msg.exposure_ms = adaptive_exposure_ms_;
-		//msg.frame_sequence = ros_frame_count_ + 1;
-		//INFO_STREAM("master sent exposure value is: " << adaptive_exposure_ms_);
-		ros_exposure_pub_.publish(msg);
-	}
-};
-
-unsigned int UEyeCamNodelet::stampAndPublishImage(unsigned int index)
-{
-	int timestamp_index = findInStampBuffer(index);
-	if (timestamp_index+1) {
-
-		//ROS_INFO("found corresponding image from at index: %i", timestamp_index);
-		// Copy corresponding images and time stamps
-		sensor_msgs::Image image;
-		sensor_msgs::CameraInfo cinfo;
-		image = image_buffer_.at(index);
-		cinfo = cinfo_buffer_.at(index);
-
-		// copy trigger time// + half of the exposure time
-		image.header.stamp = timestamp_buffer_.at(timestamp_index).frame_stamp + ros::Duration(adaptive_exposure_ms_/2000.0);
-		cinfo.header = image.header;
-		
-		//NODELET_INFO_STREAM("trigger time nsec: " << timestamp_buffer_.at(timestamp_index).frame_stamp << " cam time nsec: " << image.header.stamp);
-		// Publish image in ROS
-		ros_cam_pub_.publish(image, cinfo);
-
-    // compute optimal params for next image frame (in any case)
-    optimizeCaptureParams(image);
-		
-		// Publish Cropped images
-		if (cam_params_.crop_image) publishCroppedImage(image);
-
-		//INFO_STREAM("image_buffer size: " << image_buffer_.size() << ", cinfo_buffer size: " << cinfo_buffer_.size() << ", timestamp_buffer size: " << timestamp_buffer_.size());
-		// Erase published images and used timestamp from buffer
-		if (image_buffer_.size()) image_buffer_.erase(image_buffer_.begin() + index);
-		if (cinfo_buffer_.size()) cinfo_buffer_.erase(cinfo_buffer_.begin() + index);
-		if (timestamp_buffer_.size()) timestamp_buffer_.erase(timestamp_buffer_.begin() + timestamp_index);
-		return 0;
-
-	} else {
-		return 1;
-	}
-};
-
-int UEyeCamNodelet::findInStampBuffer(unsigned int index)
-{
-	// Check whether there is at least one image in image buffer
-	if (image_buffer_.empty())
-		return -1;
-
-	// Check whether image in image buffer with index "index" has corresponding element in timestamp buffer
-	unsigned int k = 0;
-	
-	// sequence based method
-	while (k < timestamp_buffer_.size() && ros::ok()) {
-		if (image_buffer_.at(index).header.seq == ((uint)timestamp_buffer_.at(k).frame_seq_id - stamp_buffer_offset_)) {
-			//INFO_STREAM("Found match k=" << k << ", index=" << index << "! image seq: " << image_buffer_.at(index).header.seq << ", buffer header seq: " << ((uint)timestamp_buffer_.at(k).frame_seq_id));
-			return k;
-
-		} else {
-			k += 1;
-		}
-
-	}
-
-	return -1;
-};
-
-void UEyeCamNodelet::publishRectifiedImage(const sensor_msgs::Image &frame)
-{
-	
-	cv_bridge::CvImagePtr cv_ptr;
-
-	try {
-		cv_ptr = cv_bridge::toCvCopy(frame, sensor_msgs::image_encodings::MONO8);
-
-	} catch (cv_bridge::Exception &e) {
-		ROS_ERROR("cv_bridge exception: %s", e.what());
-		return;
-	}
-	
-	// Rectify image
-	cv::Mat frame_rect;
-	camera_model_.rectifyImage(cv_ptr->image, frame_rect, cv::INTER_LINEAR);
-	
-	// crop
-	float image_size_width = 752;
-	float image_size_height = 480; 
-	float percent = 0.4;
-	cv::Mat frame_rect_cropped;
-	resize(frame_rect (cv::Rect (image_size_width*(1-percent)/2, 
-				image_size_height*(1-percent)/2, 
-				image_size_width*percent, 
-				image_size_height*percent)),
-		frame_rect_cropped, 
-		cv::Size(image_size_width, image_size_height));
-
-	// Publish rectified image
-	//sensor_msgs::ImagePtr rect_msg = cv_bridge::CvImage(frame.header, frame.encoding, frame_rect).toImageMsg();
-	sensor_msgs::ImagePtr rect_msg = cv_bridge::CvImage(frame.header, frame.encoding, frame_rect_cropped).toImageMsg();
-	ros_rect_pub_.publish(rect_msg);
-
-};
-
-
-void UEyeCamNodelet::publishCroppedImage(const sensor_msgs::Image& frame)
-{
-	
-	cv_bridge::CvImagePtr cv_ptr;
-	try {
-		cv_ptr = cv_bridge::toCvCopy(frame, sensor_msgs::image_encodings::MONO8);
-
-	} catch (cv_bridge::Exception &e) {
-		NODELET_ERROR("cv_bridge exception: %s", e.what());
-		return;
-	}
-	
-	// crop
-	float image_size_width = 752;
-	float image_size_height = 480; 
-	frame_cropped_ = cv_ptr->image(cv::Rect ((cam_params_.image_width-image_size_width)/2, (cam_params_.image_height-image_size_height)/2, image_size_width, image_size_height));
-
-	// Publish cropped image
-	sensor_msgs::ImagePtr image_msg = cv_bridge::CvImage(frame.header, frame.encoding, frame_cropped_).toImageMsg();
-	ros_cropped_pub_.publish(image_msg);
-
-};
-
-
-void UEyeCamNodelet::optimizeCaptureParams(sensor_msgs::Image image)
-{
-	
-	if(cam_params_.adaptive_exposure_mode_ == 2 && (ros_frame_count_ % 5 == 0) ) {
-  //if(cam_params_.adaptive_exposure_mode_ == 2) {
-
-    cv_bridge::CvImagePtr cv_ptr;
-    try {
-      cv_ptr = cv_bridge::toCvCopy(image, sensor_msgs::image_encodings::MONO8);
-
-    } catch (cv_bridge::Exception &e) {
-      NODELET_ERROR("cv_bridge exception: %s", e.what());
-      return;
-    }
-
-    // Compute the histogram
-    int histSize = 256;
-    float range[] = { 0, 256 } ;
-    const float *histRange = { range };
-    cv::Mat hist;
-		cv::calcHist(&cv_ptr->image, 1, 0, cv::Mat(), hist, 1, &histSize, &histRange, true, false);
-    //cv::cuda::GpuMat src_gpu(cv_ptr->image), hist_gpu;
-    //cv::cuda::histEven(src_gpu, hist_gpu, histSize, (int) range[0], (int) range[1]);
-    //hist_gpu.download(hist);
-    cv::normalize(hist, hist, 1.0, 0, cv::NORM_L1); // TODO : check normalization
-
-    // Calculate mean sample value
-		double j = 0, k = 0;
-		double blocksum = 0;
-		for (int i = 1; i <= histSize; i++) {
-			blocksum += hist.at<float>(i-1);
-			if(i % 51 == 0) {
-				j += (i/51) * blocksum;
-				k += blocksum;
-				blocksum = 0;
-			}
-		}
-		double msv = j / k;
-
-		// TODO parameterize this 
-		double setpoint = 3.0;//2.4;
-		double deadband = 1.0;
-		double adaptive_exposure_max_ = 8.0; //ms, to make sure not skipping frames, since there is readout time for image from ueye cam manual.
-		double adaptive_exposure_min_ = 0.0; // 0.1
-		double rate_max = 1.2;
-	
-		// Amount of change to the shutter speed or aperture value can be
-		// calculated directly from the histogram as the five regions
-		// of the histogram represent five f-stops. Each time the
-		// shutter time is doubled/halved the image exposure will
-		// decrease/increase with one f-stop.
-
-		// Calculate exposure durations
-		double error = msv-setpoint;
-		if (error > deadband && error < rate_max) {	// overexposed
-			adaptive_exposure_ms_ *= 1.0/error;
-		
-		} else if (error >= rate_max) {
-			adaptive_exposure_ms_ *= 1.0/rate_max;
-
-		} else if (error < -deadband && error > -rate_max) {	// underexposed
-			adaptive_exposure_ms_ *= -error;
-
-		} else if (error <= -rate_max) {
-			adaptive_exposure_ms_ *= rate_max;
-		}
-		
-		// limit exposure timing
-		if (adaptive_exposure_ms_ > adaptive_exposure_max_) { 
-			adaptive_exposure_ms_ = adaptive_exposure_max_; 
-		} else if (adaptive_exposure_ms_ < adaptive_exposure_min_) {
-			adaptive_exposure_ms_ = adaptive_exposure_min_;
-		}
-
-		//ROS_INFO_STREAM("j = " << j << "k = " << k << "msv = " << msv << ", exposure = " << adaptive_exposure_ms_);
-		//ROS_INFO_STREAM("adaptive_exposure_ms_ is " << adaptive_exposure_ms_);
-
-		// Set optimal exposure
-		
-		bool auto_exposure = false;
-		if (setExposure(auto_exposure , adaptive_exposure_ms_) != IS_SUCCESS) {
-			ROS_ERROR("Master adaptive exposure setting failed");
-		}
-		//ROS_WARN("exposure setpoint = %f", adaptive_exposure_ms_);
-		// Send exposure message for slave
-		sendSlaveExposure();
-
-	}
-
-};
-
-
-void UEyeCamNodelet::adaptiveSync()
-{
-	if (image_buffer_.size() && timestamp_buffer_.size()) {
-		// adaptive sync
-		// frontior shift mean.
-		double a = 0.9;
-		stamp_buffer_offset_double_ = a*stamp_buffer_offset_double_ + (1-a)*((double)(timestamp_buffer_.end()-1)->frame_seq_id - (double)(image_buffer_.end()-1)->header.seq);
-		int correction = (int)stamp_buffer_offset_double_ - stamp_buffer_offset_;
-		// adjust the sequence offset accordingly
-		if (correction > 0) {
-			stamp_buffer_offset_ ++; // gradually increase the offset
-			ROS_INFO_STREAM("[ " << cam_name_ << " ] correction is: " << correction << ", " << (timestamp_buffer_.end()-1)->frame_seq_id << ", " << (image_buffer_.end()-1)->header.seq); // tested about -0.05s
-			ROS_INFO_STREAM("[ " << cam_name_ << " ] Time sequence shift detected, now trigger stamp starting sequence increase to: " << stamp_buffer_offset_);
-			ROS_INFO_STREAM("[ " << cam_name_ << " ] image_buffer size: " << image_buffer_.size() << ", cinfo_buffer size: " << cinfo_buffer_.size() << ", timestamp_buffer size: " << timestamp_buffer_.size());
-		} else if (correction < 0) {
-			stamp_buffer_offset_ --; // gradually decrease the offset
-			ROS_INFO_STREAM("[ " << cam_name_ << " ] correction is: " <<correction); // tested about -0.05s
-			ROS_INFO_STREAM("[ " << cam_name_ << " ] Time sequence shift detected, now trigger stamp starting sequence decrease to: " << stamp_buffer_offset_);
-			ROS_INFO_STREAM("[ " << cam_name_ << " ] image_buffer size: " << image_buffer_.size() << ", cinfo_buffer size: " << cinfo_buffer_.size() << ", timestamp_buffer size: " << timestamp_buffer_.size());
-		}
-	}
-};
 
 } // namespace ueye_cam
 
@@ -1702,4 +1202,4 @@ void UEyeCamNodelet::adaptiveSync()
 
 
 #include <pluginlib/class_list_macros.h>
-PLUGINLIB_DECLARE_CLASS(ueye_cam, ueye_cam_nodelet, ueye_cam::UEyeCamNodelet, nodelet::Nodelet)
+PLUGINLIB_EXPORT_CLASS(ueye_cam::UEyeCamNodelet, nodelet::Nodelet)

@@ -49,7 +49,7 @@
 #define UEYE_CAM_DRIVER_HPP_
 
 
-#include <uEye.h>
+#include <ueye.h>
 #include <string>
 #include <thread>
 #include <functional>
@@ -115,6 +115,7 @@ public:
    * Loads UEye camera parameter configuration INI file into current camera's settings.
    *
    * \param filename Relative or absolute path to UEye camera configuration file.
+   * \param ignore_load_failure Return IS_SUCCESS even if failed to load INI file.
    *
    * \return IS_SUCCESS if successful, error flag otherwise (see err2str).
    */
@@ -351,24 +352,24 @@ public:
    */
   const char* processNextFrame(INT timeout_ms);
 
-  inline bool isConnected() { return (cam_handle_ != (HIDS) 0); };
+  inline bool isConnected() { return (cam_handle_ != (HIDS) 0); }
 
   inline bool freeRunModeActive() {
     return ((cam_handle_ != (HIDS) 0) &&
         (is_SetExternalTrigger(cam_handle_, IS_GET_EXTERNALTRIGGER) == IS_SET_TRIGGER_OFF) &&
         (is_CaptureVideo(cam_handle_, IS_GET_LIVE) == TRUE));
-  };
+  }
 
   inline bool extTriggerModeActive() {
     return ((cam_handle_ != (HIDS) 0) &&
         (is_SetExternalTrigger(cam_handle_, IS_GET_EXTERNALTRIGGER) == IS_SET_TRIGGER_HI_LO) &&
         (is_CaptureVideo(cam_handle_, IS_GET_LIVE) == TRUE));
-  };
+  }
 
   inline bool isCapturing() {
     return ((cam_handle_ != (HIDS) 0) &&
         (is_CaptureVideo(cam_handle_, IS_GET_LIVE) == TRUE));
-  };
+  }
 
   /**
    * Stringifies UEye API error flag.
@@ -473,7 +474,7 @@ protected:
 };
 
 
-}; // namespace ueye_cam
+} // namespace ueye_cam
 
 
 #endif /* UEYE_CAM_DRIVER_HPP_ */

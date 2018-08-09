@@ -48,32 +48,17 @@
 #ifndef UEYE_CAM_NODELET_HPP_
 #define UEYE_CAM_NODELET_HPP_
 
-#include <cstdlib>
-#include <vector>
+
 #include <nodelet/nodelet.h>
-#include <ros/package.h>
 #include <dynamic_reconfigure/server.h>
 #include <image_transport/image_transport.h>
-#include <image_geometry/pinhole_camera_model.h>
 #include <sensor_msgs/Image.h>
 #include <sensor_msgs/CameraInfo.h>
-#include <mavros_msgs/CamIMUStamp.h>
 #include <sensor_msgs/SetCameraInfo.h>
-#include <std_msgs/Int16.h>
-#include <std_srvs/Trigger.h>
-#include <ueye_cam/Exposure.h>
 #include <ueye_cam/UEyeCamConfig.h>
 #include <boost/thread/mutex.hpp>
 #include <ueye_cam/ueye_cam_driver.hpp>
-#include <camera_calibration_parsers/parse.h>
-#include <sensor_msgs/fill_image.h>
-#include <sensor_msgs/image_encodings.h>
-#include <cv_bridge/cv_bridge.h>
-#include <opencv2/highgui/highgui.hpp>
-#include <opencv2/imgproc/imgproc.hpp>
-//#include <opencv2/cudaimgproc.hpp>
-//#include <opencv2/cudaarithm.hpp>
-//#include <opencv2/gpu/gpu.hpp>
+
 
 namespace ueye_cam {
 
@@ -91,7 +76,7 @@ public:
   constexpr static unsigned int RECONFIGURE_CLOSE = 3;
   constexpr static int DEFAULT_IMAGE_WIDTH = 640;  // NOTE: these default values do not matter, as they
   constexpr static int DEFAULT_IMAGE_HEIGHT = 480; // are overwritten by queryCamParams() during connectCam()
-  constexpr static double DEFAULT_EXPOSURE = 10.0;
+  constexpr static double DEFAULT_EXPOSURE = 33.0;
   constexpr static double DEFAULT_FRAME_RATE = 10.0;
   constexpr static int DEFAULT_PIXEL_CLOCK = 25;
   constexpr static int DEFAULT_FLASH_DURATION = 1000;
@@ -155,16 +140,6 @@ protected:
    */
   bool setCamInfo(sensor_msgs::SetCameraInfo::Request& req,
       sensor_msgs::SetCameraInfo::Response& rsp);
-      
-  void setSlaveExposure(const ueye_cam::Exposure& msg);
-  
-  void bufferTimestamp(const mavros_msgs::CamIMUStamp& msg);
-
-  void sendTriggerReady();
-
-  void acknTriggerCommander();
-
-  void sendSlaveExposure();
 
   /**
    * Loads the camera's intrinsic parameters from camIntrFilename.
@@ -196,26 +171,6 @@ protected:
    * Returns image's timestamp or current wall time if driver call fails.
    */
   ros::Time getImageTimestamp();
-  
-  // XXX descr
-  unsigned int stampAndPublishImage(unsigned int index);
-  int findInStampBuffer(unsigned int index);
-  void adaptiveSync();
-  
-  /**
-   * Image rectification
-   */
-  void publishRectifiedImage(const sensor_msgs::Image &frame);
-
-  /**
-   * Image cropping
-   */
-  void publishCroppedImage(const sensor_msgs::Image &frame);
-
-  /**
-   * Exposure controller XXX TODO MAKE IT ZERO-COPY
-   */
-  void optimizeCaptureParams(sensor_msgs::Image image);
 
   /**
    * Returns image's timestamp based on device's internal clock or current wall time if driver call fails.
@@ -232,48 +187,19 @@ protected:
   bool cfg_sync_requested_;
 
   image_transport::CameraPublisher ros_cam_pub_;
-  image_transport::Publisher ros_rect_pub_;
-  image_transport::Publisher ros_cropped_pub_;
-  ros::Publisher ros_exposure_pub_;
-  
-  ros::Subscriber ros_timestamp_sub_;
-  ros::Subscriber ros_exposure_sub_;
-  
   sensor_msgs::Image ros_image_;
   sensor_msgs::CameraInfo ros_cam_info_;
   unsigned int ros_frame_count_;
-  unsigned int stamp_buffer_offset_;
-  double stamp_buffer_offset_double_;
-
   ros::Publisher timeout_pub_;
   unsigned long long int timeout_count_;
 
-  // Image rectification
-  image_geometry::PinholeCameraModel camera_model_;
-  
-  // Data buffers
-  int sync_buffer_size_;
-  std::vector<sensor_msgs::Image> image_buffer_;
-  std::vector<sensor_msgs::CameraInfo> cinfo_buffer_;
-  std::vector<mavros_msgs::CamIMUStamp> timestamp_buffer_;
-  boost::mutex buffer_mutex_;
-  
   ros::ServiceServer set_cam_info_srv_;
-  ros::ServiceClient trigger_ready_srv_;
 
   std::string frame_name_;
   std::string cam_topic_;
   std::string timeout_topic_;
   std::string cam_intr_filename_;
   std::string cam_params_filename_; // should be valid UEye INI file
-  
-  // Adaptive exposure controller parameters
-  int adaptive_exposure_mode_;
-  float adaptive_exposure_min_;
-  float adaptive_exposure_max_;
-  
-  double adaptive_exposure_ms_;
-  
   ueye_cam::UEyeCamConfig cam_params_;
 
   ros::Time init_ros_time_; // for processing frames
@@ -282,11 +208,10 @@ protected:
   ros::Time init_publish_time_; // for throttling frames from being published (see cfg.output_rate)
   uint64_t prev_output_frame_idx_; // see init_publish_time_
   boost::mutex output_rate_mutex_;
-  cv::Mat frame_cropped_;
 };
 
 
-}; // namespace ueye_cam
+} // namespace ueye_cam
 
 
 #endif /* UEYE_CAM_NODELET_HPP_ */

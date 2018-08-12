@@ -11,8 +11,9 @@ public:
 	TriggerReady()
 	{
 		cam0_OK_ = false;
-		cam1_OK_ = false;
-		framerate_hz_ = 18.0; // default framerate TODO get this from the ueye node
+		//framerate_hz_ = 18.0; // default framerate TODO get this from the ueye node
+		n_.param<float>("frame_rate_hz", framerate_hz_, 30.0);
+		n_.param<std::string>("camera_name", camera_name_, "camera");
 		triggerClient_ = n_.serviceClient<mavros_msgs::CommandTriggerControl>("mavros/cmd/trigger_control");
 		advertiseService();
 	}
@@ -25,27 +26,16 @@ public:
 		return true;
 	}
 
-	bool servCam1(std_srvs::Trigger::Request &req, std_srvs::Trigger::Response &resp)
-	{
-		cam1_OK_ = true;
-		resp.success = true;
-		ROS_INFO("TriggerReady: Camera 1 is primed for trigger");
-		return true;
-	}
 
 	bool cam0_OK()
 	{
 		return cam0_OK_;
 	}
 
-	bool cam1_OK()
-	{
-		return cam1_OK_;
-	}
 
 	void reset_cam()
 	{
-		cam0_OK_ = cam1_OK_ = false;
+		cam0_OK_ = false;
 	}
 
 	int enableTrigger()
@@ -82,16 +72,15 @@ public:
 
 	void advertiseService()
 	{
-		serverCam0_ = n_.advertiseService("cam0/trigger_ready", &TriggerReady::servCam0, this);
-		serverCam1_ = n_.advertiseService("cam1/trigger_ready", &TriggerReady::servCam1, this);
+		serverCam0_ = n_.advertiseService(camera_name_ + "/trigger_ready", &TriggerReady::servCam0, this);
 	}
 
 
 private:
 
 	bool cam0_OK_;
-	bool cam1_OK_;
 	float framerate_hz_;
+	std::string camera_name_;
 
 	ros::NodeHandle n_;
 
@@ -99,7 +88,6 @@ private:
 	mavros_msgs::CommandTriggerControl srv_;
 
 	ros::ServiceServer serverCam0_;
-	ros::ServiceServer serverCam1_;
 
 };
 
@@ -120,7 +108,6 @@ int main(int argc, char **argv)
 	ROS_INFO_STREAM("Started px4 triggering");
 	
 	// wait for camera acknowledge
-	//while (!(tr.cam0_OK() && tr.cam1_OK()) && ros::ok()) {
 	while (!tr.cam0_OK() && ros::ok()) {
 		ros::spinOnce();
 		r.sleep();
@@ -135,7 +122,6 @@ int main(int argc, char **argv)
 	ROS_INFO("TriggerReady: Stopped px4 triggering to set the offset");
 	
 	// wait for camera acknowledge
-	//while (!(tr.cam0_OK() && tr.cam1_OK()) && ros::ok()) {
 	while (!tr.cam0_OK() && ros::ok()) {
 		ros::spinOnce();
 		r.sleep();

@@ -1,0 +1,13 @@
+<launch>
+
+	<!-- Frame rate: Set in PX4 via QGC-->
+	<arg name="frame_rate_hz" default="30.0" />
+	<arg name="camera_name" default="cam0" />
+
+	<param name="frame_rate_hz" value="$(arg frame_rate_hz)" />
+	<param name="camera_name" type="string" value="$(arg camera_name)" />
+
+	<node pkg="ueye_cam" type="trigger_commander" name="singleCam_trigger_commander_node" output="screen">
+	</node>
+
+</launch>

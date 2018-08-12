@@ -1,0 +1,6 @@
+<launch>
+
+	<include file="$(find ueye_cam)/launch/send_trigger_command.launch"/>
+	<include file="$(find ueye_cam)/launch/UI_1226LE_mono_ext_trigger.launch"/>
+
+</launch>

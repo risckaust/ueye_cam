@@ -26,7 +26,6 @@ find_package(catkin REQUIRED COMPONENTS
   image_transport
   image_geometry
   sensor_msgs
-  mavros_msgs
   std_srvs
   std_msgs
   camera_calibration_parsers
@@ -91,7 +90,7 @@ generate_dynamic_reconfigure_options(
 catkin_package(
   INCLUDE_DIRS include
   LIBRARIES ${UEYECAM_LIB_NAME} ${UEYECAM_NODELET_NAME}
-  CATKIN_DEPENDS roscpp nodelet dynamic_reconfigure cv_bridge image_transport image_geometry sensor_msgs camera_calibration_parsers camera_info_manager mavros_msgs std_srvs std_msgs message_runtime
+  CATKIN_DEPENDS roscpp nodelet dynamic_reconfigure cv_bridge image_transport image_geometry sensor_msgs camera_calibration_parsers camera_info_manager std_srvs std_msgs message_runtime
   DEPENDS OpenCV
   )
 
@@ -109,19 +108,7 @@ add_library(${UEYECAM_NODELET_NAME} ${UEYECAM_NODELET_SOURCES} ${UEYECAM_NODELET
 target_link_libraries(${UEYECAM_NODELET_NAME} ${catkin_LIBRARIES} ${UEYECAM_LIB_NAME})
 add_dependencies(${UEYECAM_NODELET_NAME} ${PROJECT_NAME}_gencfg)
 
-add_executable(trigger_commander
-  src/ueye_trigger_ready.cpp
-)
-target_link_libraries(trigger_commander
-  ${catkin_LIBRARIES}
-)
 
-add_executable(trigger_commander_stereo
-  src/ueye_trigger_ready_stereo.cpp
-)
-target_link_libraries(trigger_commander_stereo
-  ${catkin_LIBRARIES}
-)
 
 add_executable(check_ueye_api src/check_ueye_api.cpp)
 target_link_libraries(check_ueye_api ${catkin_LIBRARIES} ${UEYECAM_LIB_NAME})

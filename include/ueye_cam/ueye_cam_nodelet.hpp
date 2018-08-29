@@ -57,7 +57,6 @@
 #include <image_geometry/pinhole_camera_model.h>
 #include <sensor_msgs/Image.h>
 #include <sensor_msgs/CameraInfo.h>
-#include <mavros_msgs/CamIMUStamp.h>
 #include <sensor_msgs/SetCameraInfo.h>
 #include <std_msgs/Int16.h>
 #include <std_srvs/Trigger.h>
@@ -71,14 +70,24 @@
 #include <cv_bridge/cv_bridge.h>
 #include <opencv2/highgui/highgui.hpp>
 #include <opencv2/imgproc/imgproc.hpp>
+#include <sensor_msgs/TimeReference.h>
 //#include <opencv2/cudaimgproc.hpp>
 //#include <opencv2/cudaarithm.hpp>
 //#include <opencv2/gpu/gpu.hpp>
 
 namespace ueye_cam {
 
+// must be x^2-1
+#define FIFO_SIZE 1023
 
 typedef dynamic_reconfigure::Server<ueye_cam::UEyeCamConfig> ReconfigureServer;
+
+struct TriggerPacket {
+  uint32_t triggerCounter;
+  ros::Time triggerTime;
+};
+
+typedef struct TriggerPacket TriggerPacket_t;
 
 
 /**
@@ -118,6 +127,8 @@ public:
    */
   void configCallback(ueye_cam::UEyeCamConfig& config, uint32_t level);
 
+  void callback(const sensor_msgs::TimeReference::ConstPtr &time_ref);
+
 
 protected:
   /**
@@ -155,16 +166,9 @@ protected:
    */
   bool setCamInfo(sensor_msgs::SetCameraInfo::Request& req,
       sensor_msgs::SetCameraInfo::Response& rsp);
-      
-  void setSlaveExposure(const ueye_cam::Exposure& msg);
-  
-  void bufferTimestamp(const mavros_msgs::CamIMUStamp& msg);
 
-  void sendTriggerReady();
 
-  void acknTriggerCommander();
 
-  void sendSlaveExposure();
 
   /**
    * Loads the camera's intrinsic parameters from camIntrFilename.
@@ -198,9 +202,9 @@ protected:
   ros::Time getImageTimestamp();
   
   // XXX descr
-  unsigned int stampAndPublishImage(unsigned int index);
+
   int findInStampBuffer(unsigned int index);
-  void adaptiveSync();
+
   
   /**
    * Image rectification
@@ -234,10 +238,9 @@ protected:
   image_transport::CameraPublisher ros_cam_pub_;
   image_transport::Publisher ros_rect_pub_;
   image_transport::Publisher ros_cropped_pub_;
-  ros::Publisher ros_exposure_pub_;
+
   
-  ros::Subscriber ros_timestamp_sub_;
-  ros::Subscriber ros_exposure_sub_;
+
   
   sensor_msgs::Image ros_image_;
   sensor_msgs::CameraInfo ros_cam_info_;
@@ -255,7 +258,6 @@ protected:
   int sync_buffer_size_;
   std::vector<sensor_msgs::Image> image_buffer_;
   std::vector<sensor_msgs::CameraInfo> cinfo_buffer_;
-  std::vector<mavros_msgs::CamIMUStamp> timestamp_buffer_;
   boost::mutex buffer_mutex_;
   
   ros::ServiceServer set_cam_info_srv_;
@@ -283,6 +285,19 @@ protected:
   uint64_t prev_output_frame_idx_; // see init_publish_time_
   boost::mutex output_rate_mutex_;
   cv::Mat frame_cropped_;
+
+private:
+  int outOfSyncCounter;
+
+  TriggerPacket_t fifo[FIFO_SIZE];
+  uint32_t nextTriggerCounter;
+  int fifoReadPos;
+  int fifoWritePos;
+  void fifoWrite(TriggerPacket_t pkt);
+  bool fifoRead(TriggerPacket_t &pkt);
+  bool fifoLook(TriggerPacket_t &pkt);
+
+  ros::Subscriber timeRef_sub;
 };
 
 

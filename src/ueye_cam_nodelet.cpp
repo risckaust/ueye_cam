@@ -122,6 +122,11 @@ UEyeCamNodelet::UEyeCamNodelet():
   cam_params_.crop_image = false;
   sync_buffer_size_ = 100;
   adaptive_exposure_ms_ = 0.001;
+
+  fifoReadPos = fifoWritePos = 0;
+  nextTriggerCounter = 0;
+  outOfSyncCounter = 0;
+
 };
 
 
@@ -174,18 +179,14 @@ void UEyeCamNodelet::onInit() {
 
   // For IMU sync
   ros_rect_pub_ = it.advertise(cam_name_ + "/image_rect", 100); // TODO : not hardcode name
+
+  timeRef_sub = nh.subscribe("/imu/trigger_time", 1000, &UEyeCamNodelet::callback, this);
   
   if (cam_params_.crop_image) {
     ros_cropped_pub_ = it.advertise(cam_name_ + "/image_cropped", 3);
   }
 	
-  ros_exposure_pub_ = nh.advertise<ueye_cam::Exposure>("master_exposure", 1);
 
-  ros_timestamp_sub_ = nh.subscribe("mavros/cam_imu_sync/cam_imu_stamp", 1,
-					  &UEyeCamNodelet::bufferTimestamp, this);
-  ros_exposure_sub_ = nh.subscribe("master_exposure", 1,
-					  &UEyeCamNodelet::setSlaveExposure, this);
-  trigger_ready_srv_ = nh.serviceClient<std_srvs::Trigger>(cam_name_ + "/trigger_ready");
 
 	// Initiate camera and start capture
 	if (connectCam() != IS_SUCCESS) {
@@ -983,7 +984,6 @@ void UEyeCamNodelet::frameGrabLoop() {
 	
         NODELET_INFO_STREAM("Camera " << cam_name_ << " set to external trigger mode");
       	
-	sendTriggerReady();
   }
   
   // set camera model for rectification
@@ -1188,30 +1188,46 @@ void UEyeCamNodelet::frameGrabLoop() {
 
 
 		// buffer the image frame and camera info
-		output_rate_mutex_.lock();
-		image_buffer_.push_back(*img_msg_ptr);
-		cinfo_buffer_.push_back(*cam_info_msg_ptr);
-		output_rate_mutex_.unlock();
+		//output_rate_mutex_.lock();
+		//image_buffer_.push_back(*img_msg_ptr);
+		//cinfo_buffer_.push_back(*cam_info_msg_ptr);
+		//output_rate_mutex_.unlock();
 		
-		buffer_mutex_.lock();
-		//adaptiveSync();		
-		if (image_buffer_.size() && timestamp_buffer_.size()) {
-						
-			unsigned int i;
-			//INFO_STREAM("image_buffer_ size: " << image_buffer_.size() << ", stamp_buffer_ size: " << timestamp_buffer_.size());
-			for (i = 0; i < image_buffer_.size() && timestamp_buffer_.size() > 0 ;) {
-				i += stampAndPublishImage(i);
-			}
-		}
-		buffer_mutex_.unlock();
+		//buffer_mutex_.lock();
+		
+		/* TODO check trigger counter here, and stamp/publish image */
 
-		// Check whether buffer has stale data and if so, throw away oldest
-		if (image_buffer_.size() > 100) {
-			image_buffer_.erase(image_buffer_.begin(), image_buffer_.begin()+50);
-			cinfo_buffer_.erase(cinfo_buffer_.begin(), cinfo_buffer_.begin()+50);
-			//ROS_ERROR_THROTTLE(1, "%i: Dropping image", cam_id_);
-			INFO_STREAM("[ " << cam_name_ << " ] Dropping half of the image buffer");
-		}
+     	// wait for new trigger packet to receive
+	    TriggerPacket_t pkt;
+	    while (!fifoLook(pkt)) {    
+	      ros::Duration(0.001).sleep();
+	    }
+
+        // a new video frame was captured - check if we need to skip it if one trigger packet was lost
+        if (pkt.triggerCounter == nextTriggerCounter) {
+          fifoRead(pkt);
+          const auto expose_us = cam_params_.exposure * 1000.0;
+          const auto expose_duration = ros::Duration(expose_us * 1e-6 / 2);
+          //const auto time = ros::Time::now() + expose_duration;  
+          //bluefox2_ros_->PublishCamera(pkt.triggerTime + expose_duration);
+		  /* TODO publish stamped image */
+		  // *cam_info_msg_ptr
+          (*img_msg_ptr).header.stamp = pkt.triggerTime + expose_duration;
+          (*cam_info_msg_ptr).header = (*img_msg_ptr).header;
+
+          ros_cam_pub_.publish(*img_msg_ptr, *cam_info_msg_ptr);
+        } else { 
+          //ros::Duration(0.001).sleep();
+          outOfSyncCounter++;      
+          if ((outOfSyncCounter % 100) == 0){
+	    //ROS_WARN("trigger not in sync (seq expected %10u, got %10u)!", nextTriggerCounter, pkt.tri ggerCounter);  
+	       ROS_WARN("trigger not in sync (%d)!", outOfSyncCounter);   
+          }
+        } 
+        nextTriggerCounter++;
+
+		//buffer_mutex_.unlock();
+
 
 	// For non sync cases
 	} else {
@@ -1381,143 +1397,6 @@ void UEyeCamNodelet::handleTimeout() {
   timeout_pub_.publish(timeout_msg);
 };
 
-//-------------------------
-// For IMU sync
-void UEyeCamNodelet::setSlaveExposure(const ueye_cam::Exposure &msg)
-{
-	if(cam_params_.adaptive_exposure_mode_ == 1) { // accept exposure timing from master camera
-		// TODO : re-add check for sequence again
-		adaptive_exposure_ms_ = msg.exposure_ms;
-		bool auto_exposure = false;
-		if (setExposure(auto_exposure , adaptive_exposure_ms_) != IS_SUCCESS) {
-			ROS_ERROR("Slave adaptive exposure setting failed");
-		}
-	}
-
-};
-
-void UEyeCamNodelet::bufferTimestamp(const mavros_msgs::CamIMUStamp &msg)
-{
-	if(cam_params_.do_imu_sync) {
-		buffer_mutex_.lock();
-		timestamp_buffer_.push_back(msg);
-
-		// Check whether buffer has stale stamp and if so throw away oldest
-		if (timestamp_buffer_.size() > 100) {
-			timestamp_buffer_.erase(timestamp_buffer_.begin(), timestamp_buffer_.begin()+50);
-			//ROS_ERROR_THROTTLE(1, "Dropping timestamp");
-			INFO_STREAM("[ " << cam_name_ << " ] Dropping half of the timestamp buffer.");
-		}
-		buffer_mutex_.unlock();
-	}
-};
-
-void UEyeCamNodelet::sendTriggerReady()
-{
-	
-	acknTriggerCommander(); // call service: First ackn will STOP px4 triggering
-
-	// set stamp_buffer_offset_ from px4
-	ros::Duration(1).sleep(); // wait for timestamp callback from mavros
-	if (timestamp_buffer_.empty())	stamp_buffer_offset_ = 0;
-	else 				stamp_buffer_offset_ = 1 + (uint)(timestamp_buffer_.end()-1)->frame_seq_id;
-	stamp_buffer_offset_double_ = (double)stamp_buffer_offset_;
-
-	INFO_STREAM("Detected px4 starting stamp sequence will be: " << stamp_buffer_offset_);
-
-	timestamp_buffer_.clear(); // timestamp_buffer_ should have some elements already from px4 since it is in a different thread.
-	ros_frame_count_ = 0;
-	int i=0; 
-	while (processNextFrame(2000) != NULL) {i++;} // this should flush all the unused frame in the camera buffer
-	INFO_STREAM("Flashed " << i << " images from camera buffer prior to start!");
-	
-	acknTriggerCommander(); // call service: second ackn will RESTART px4 triggering
-};
-
-void UEyeCamNodelet::acknTriggerCommander()
-{
-	std_srvs::Trigger sig;
-	if (!trigger_ready_srv_.call(sig)) {
-		ROS_ERROR("Failed to call ready-for-trigger");
-	}
-};
-
-void UEyeCamNodelet::sendSlaveExposure()
-{
-	if(cam_params_.adaptive_exposure_mode_ == 2)
-	{
-		ueye_cam::Exposure msg;
-		msg.header.stamp = ros::Time::now();
-		//msg.header.seq = ros_frame_count_ + 1; // TODO : This won't work
-
-		msg.exposure_ms = adaptive_exposure_ms_;
-		//msg.frame_sequence = ros_frame_count_ + 1;
-		//INFO_STREAM("master sent exposure value is: " << adaptive_exposure_ms_);
-		ros_exposure_pub_.publish(msg);
-	}
-};
-
-unsigned int UEyeCamNodelet::stampAndPublishImage(unsigned int index)
-{
-	int timestamp_index = findInStampBuffer(index);
-	if (timestamp_index+1) {
-
-		//ROS_INFO("found corresponding image from at index: %i", timestamp_index);
-		// Copy corresponding images and time stamps
-		sensor_msgs::Image image;
-		sensor_msgs::CameraInfo cinfo;
-		image = image_buffer_.at(index);
-		cinfo = cinfo_buffer_.at(index);
-
-		// copy trigger time// + half of the exposure time
-		image.header.stamp = timestamp_buffer_.at(timestamp_index).frame_stamp + ros::Duration(adaptive_exposure_ms_/2000.0);
-		cinfo.header = image.header;
-		
-		//NODELET_INFO_STREAM("trigger time nsec: " << timestamp_buffer_.at(timestamp_index).frame_stamp << " cam time nsec: " << image.header.stamp);
-		// Publish image in ROS
-		ros_cam_pub_.publish(image, cinfo);
-
-    // compute optimal params for next image frame (in any case)
-    optimizeCaptureParams(image);
-		
-		// Publish Cropped images
-		if (cam_params_.crop_image) publishCroppedImage(image);
-
-		//INFO_STREAM("image_buffer size: " << image_buffer_.size() << ", cinfo_buffer size: " << cinfo_buffer_.size() << ", timestamp_buffer size: " << timestamp_buffer_.size());
-		// Erase published images and used timestamp from buffer
-		if (image_buffer_.size()) image_buffer_.erase(image_buffer_.begin() + index);
-		if (cinfo_buffer_.size()) cinfo_buffer_.erase(cinfo_buffer_.begin() + index);
-		if (timestamp_buffer_.size()) timestamp_buffer_.erase(timestamp_buffer_.begin() + timestamp_index);
-		return 0;
-
-	} else {
-		return 1;
-	}
-};
-
-int UEyeCamNodelet::findInStampBuffer(unsigned int index)
-{
-	// Check whether there is at least one image in image buffer
-	if (image_buffer_.empty())
-		return -1;
-
-	// Check whether image in image buffer with index "index" has corresponding element in timestamp buffer
-	unsigned int k = 0;
-	
-	// sequence based method
-	while (k < timestamp_buffer_.size() && ros::ok()) {
-		if (image_buffer_.at(index).header.seq == ((uint)timestamp_buffer_.at(k).frame_seq_id - stamp_buffer_offset_)) {
-			//INFO_STREAM("Found match k=" << k << ", index=" << index << "! image seq: " << image_buffer_.at(index).header.seq << ", buffer header seq: " << ((uint)timestamp_buffer_.at(k).frame_seq_id));
-			return k;
-
-		} else {
-			k += 1;
-		}
-
-	}
-
-	return -1;
-};
 
 void UEyeCamNodelet::publishRectifiedImage(const sensor_msgs::Image &frame)
 {
@@ -1579,121 +1458,38 @@ void UEyeCamNodelet::publishCroppedImage(const sensor_msgs::Image& frame)
 
 };
 
-
-void UEyeCamNodelet::optimizeCaptureParams(sensor_msgs::Image image)
-{
-	
-	if(cam_params_.adaptive_exposure_mode_ == 2 && (ros_frame_count_ % 5 == 0) ) {
-  //if(cam_params_.adaptive_exposure_mode_ == 2) {
-
-    cv_bridge::CvImagePtr cv_ptr;
-    try {
-      cv_ptr = cv_bridge::toCvCopy(image, sensor_msgs::image_encodings::MONO8);
-
-    } catch (cv_bridge::Exception &e) {
-      NODELET_ERROR("cv_bridge exception: %s", e.what());
-      return;
-    }
-
-    // Compute the histogram
-    int histSize = 256;
-    float range[] = { 0, 256 } ;
-    const float *histRange = { range };
-    cv::Mat hist;
-		cv::calcHist(&cv_ptr->image, 1, 0, cv::Mat(), hist, 1, &histSize, &histRange, true, false);
-    //cv::cuda::GpuMat src_gpu(cv_ptr->image), hist_gpu;
-    //cv::cuda::histEven(src_gpu, hist_gpu, histSize, (int) range[0], (int) range[1]);
-    //hist_gpu.download(hist);
-    cv::normalize(hist, hist, 1.0, 0, cv::NORM_L1); // TODO : check normalization
-
-    // Calculate mean sample value
-		double j = 0, k = 0;
-		double blocksum = 0;
-		for (int i = 1; i <= histSize; i++) {
-			blocksum += hist.at<float>(i-1);
-			if(i % 51 == 0) {
-				j += (i/51) * blocksum;
-				k += blocksum;
-				blocksum = 0;
-			}
-		}
-		double msv = j / k;
-
-		// TODO parameterize this 
-		double setpoint = 3.0;//2.4;
-		double deadband = 1.0;
-		double adaptive_exposure_max_ = 8.0; //ms, to make sure not skipping frames, since there is readout time for image from ueye cam manual.
-		double adaptive_exposure_min_ = 0.0; // 0.1
-		double rate_max = 1.2;
-	
-		// Amount of change to the shutter speed or aperture value can be
-		// calculated directly from the histogram as the five regions
-		// of the histogram represent five f-stops. Each time the
-		// shutter time is doubled/halved the image exposure will
-		// decrease/increase with one f-stop.
-
-		// Calculate exposure durations
-		double error = msv-setpoint;
-		if (error > deadband && error < rate_max) {	// overexposed
-			adaptive_exposure_ms_ *= 1.0/error;
-		
-		} else if (error >= rate_max) {
-			adaptive_exposure_ms_ *= 1.0/rate_max;
-
-		} else if (error < -deadband && error > -rate_max) {	// underexposed
-			adaptive_exposure_ms_ *= -error;
-
-		} else if (error <= -rate_max) {
-			adaptive_exposure_ms_ *= rate_max;
-		}
-		
-		// limit exposure timing
-		if (adaptive_exposure_ms_ > adaptive_exposure_max_) { 
-			adaptive_exposure_ms_ = adaptive_exposure_max_; 
-		} else if (adaptive_exposure_ms_ < adaptive_exposure_min_) {
-			adaptive_exposure_ms_ = adaptive_exposure_min_;
-		}
-
-		//ROS_INFO_STREAM("j = " << j << "k = " << k << "msv = " << msv << ", exposure = " << adaptive_exposure_ms_);
-		//ROS_INFO_STREAM("adaptive_exposure_ms_ is " << adaptive_exposure_ms_);
-
-		// Set optimal exposure
-		
-		bool auto_exposure = false;
-		if (setExposure(auto_exposure , adaptive_exposure_ms_) != IS_SUCCESS) {
-			ROS_ERROR("Master adaptive exposure setting failed");
-		}
-		//ROS_WARN("exposure setpoint = %f", adaptive_exposure_ms_);
-		// Send exposure message for slave
-		sendSlaveExposure();
-
-	}
-
+void UEyeCamNodelet::callback(const sensor_msgs::TimeReference::ConstPtr &time_ref) {
+  //if ( (time_ref->header.seq & 63) == 0){
+  //  ROS_WARN("recv triggertime seq %10u", time_ref->header.seq);
+  //}
+  //  ros::Duration(0.001).sleep();
+  ueye_cam::TriggerPacket_t pkt;
+  pkt.triggerTime = time_ref->header.stamp;
+  pkt.triggerCounter = time_ref->header.seq;     
+  fifoWrite(pkt);
 };
 
-
-void UEyeCamNodelet::adaptiveSync()
-{
-	if (image_buffer_.size() && timestamp_buffer_.size()) {
-		// adaptive sync
-		// frontior shift mean.
-		double a = 0.9;
-		stamp_buffer_offset_double_ = a*stamp_buffer_offset_double_ + (1-a)*((double)(timestamp_buffer_.end()-1)->frame_seq_id - (double)(image_buffer_.end()-1)->header.seq);
-		int correction = (int)stamp_buffer_offset_double_ - stamp_buffer_offset_;
-		// adjust the sequence offset accordingly
-		if (correction > 0) {
-			stamp_buffer_offset_ ++; // gradually increase the offset
-			ROS_INFO_STREAM("[ " << cam_name_ << " ] correction is: " << correction << ", " << (timestamp_buffer_.end()-1)->frame_seq_id << ", " << (image_buffer_.end()-1)->header.seq); // tested about -0.05s
-			ROS_INFO_STREAM("[ " << cam_name_ << " ] Time sequence shift detected, now trigger stamp starting sequence increase to: " << stamp_buffer_offset_);
-			ROS_INFO_STREAM("[ " << cam_name_ << " ] image_buffer size: " << image_buffer_.size() << ", cinfo_buffer size: " << cinfo_buffer_.size() << ", timestamp_buffer size: " << timestamp_buffer_.size());
-		} else if (correction < 0) {
-			stamp_buffer_offset_ --; // gradually decrease the offset
-			ROS_INFO_STREAM("[ " << cam_name_ << " ] correction is: " <<correction); // tested about -0.05s
-			ROS_INFO_STREAM("[ " << cam_name_ << " ] Time sequence shift detected, now trigger stamp starting sequence decrease to: " << stamp_buffer_offset_);
-			ROS_INFO_STREAM("[ " << cam_name_ << " ] image_buffer size: " << image_buffer_.size() << ", cinfo_buffer size: " << cinfo_buffer_.size() << ", timestamp_buffer size: " << timestamp_buffer_.size());
-		}
-	}
+void UEyeCamNodelet::fifoWrite(TriggerPacket_t pkt){
+  fifo[fifoWritePos]=pkt;
+  fifoWritePos = (fifoWritePos + 1) % FIFO_SIZE;
+  if (fifoWritePos == fifoReadPos){
+    ROS_WARN("FIFO overflow!");
+  }
 };
+
+bool UEyeCamNodelet::fifoRead(TriggerPacket_t &pkt){
+  if (fifoReadPos == fifoWritePos) return false;
+  pkt = fifo[fifoReadPos];
+  fifoReadPos = (fifoReadPos + 1) % FIFO_SIZE;
+  return true;
+};
+
+bool UEyeCamNodelet::fifoLook(TriggerPacket_t &pkt){
+  if (fifoReadPos == fifoWritePos) return false;
+  pkt = fifo[fifoReadPos];
+  return true;
+};
+
 
 } // namespace ueye_cam
 

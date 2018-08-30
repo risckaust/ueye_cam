@@ -290,6 +290,7 @@ private:
   int outOfSyncCounter;
 
   TriggerPacket_t fifo[FIFO_SIZE];
+  TriggerPacket_t refTime_pkt;
   uint32_t nextTriggerCounter;
   int fifoReadPos;
   int fifoWritePos;

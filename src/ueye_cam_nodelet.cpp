@@ -1198,34 +1198,34 @@ void UEyeCamNodelet::frameGrabLoop() {
 		//buffer_mutex_.lock();
 		
 
-     	/*
+     	
 	    TriggerPacket_t pkt;
 	    while (!fifoLook(pkt)) {    
 	      ros::Duration(0.001).sleep();
 	    }
-	    */
+	    
 
 	    //ROS_WARN("Current refTime_pkt.triggerCunter = %d ", refTime_pkt.triggerCounter);
 	    //ROS_WARN("Current nextTriggerCounter = %d ", nextTriggerCounter);
 
         // a new video frame was captured - check if we need to skip it if one trigger packet was lost
-        //if (pkt.triggerCounter == nextTriggerCounter) {
-	    if (refTime_pkt.triggerCounter == nextTriggerCounter) {
-          //fifoRead(pkt);
+        if (pkt.triggerCounter == nextTriggerCounter) {
+	    //if (refTime_pkt.triggerCounter == nextTriggerCounter) {
+          fifoRead(pkt);
           const auto expose_us = cam_params_.exposure * 1000.0;
           const auto expose_duration = ros::Duration(expose_us * 1e-6 / 2);
           //const auto time = ros::Time::now() + expose_duration;  
           //bluefox2_ros_->PublishCamera(pkt.triggerTime + expose_duration);
 		  /* TODO publish stamped image */
 		  // *cam_info_msg_ptr
-          (*img_msg_ptr).header.stamp = refTime_pkt.triggerTime + expose_duration;
+          (*img_msg_ptr).header.stamp = pkt.triggerTime + expose_duration;
           (*cam_info_msg_ptr).header = (*img_msg_ptr).header;
 
           ros_cam_pub_.publish(*img_msg_ptr, *cam_info_msg_ptr);
         } else { 
           //ros::Duration(0.001).sleep();
           outOfSyncCounter++;      
-          if ((outOfSyncCounter % 20) == 0){
+          if ((outOfSyncCounter % 100) == 0){
 	    //ROS_WARN("trigger not in sync (seq expected %10u, got %10u)!", nextTriggerCounter, pkt.tri ggerCounter);  
 	       ROS_WARN("trigger not in sync (%d)!", outOfSyncCounter);   
           }
@@ -1234,11 +1234,13 @@ void UEyeCamNodelet::frameGrabLoop() {
            * Check for 3 seconds => (20 frames *3 = 60)
 		   * currently the FPS is hardcoded in Arduino (@20Hz)
           */
+          /*
           if (outOfSyncCounter > 60){
           	nextTriggerCounter = refTime_pkt.triggerCounter;
           	outOfSyncCounter = 0;
           	ROS_WARN("Resyncing: setting counter to  (%d)!", nextTriggerCounter);
           }
+          */
         } 
         nextTriggerCounter++;
 
@@ -1484,8 +1486,8 @@ void UEyeCamNodelet::callback(const sensor_msgs::TimeReference::ConstPtr &time_r
   pkt.triggerCounter = time_ref->header.seq;
   fifoWrite(pkt);
 
-  refTime_pkt.triggerTime = time_ref->header.stamp;
-  refTime_pkt.triggerCounter = time_ref->header.seq;
+  //refTime_pkt.triggerTime = time_ref->header.stamp;
+  //refTime_pkt.triggerCounter = time_ref->header.seq;
 };
 
 void UEyeCamNodelet::fifoWrite(TriggerPacket_t pkt){

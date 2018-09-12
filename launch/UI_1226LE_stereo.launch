@@ -1,0 +1,6 @@
+<launch>
+
+  <include file="$(find ueye_cam)/launch/UI_1226LE_mono_ext_trigger_left_cam.launch" />
+  <include file="$(find ueye_cam)/launch/UI_1226LE_mono_ext_trigger_right_cam.launch" />
+  
+</launch>

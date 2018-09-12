@@ -1,15 +1,15 @@
 <launch>
-  <node name="check_ueye_api" pkg="ueye_cam" type="check_ueye_api" required="true" />
-  <arg name="nodelet_manager_name" value="nodelet_manager" />
-  <arg name="camera_name" value="cam/left" />
+  <node name="check_ueye_api_right" pkg="ueye_cam" type="check_ueye_api" required="true" />
+  <arg name="nodelet_manager_name" value="nodelet_manager_right" />
+  <arg name="camera_name" value="cam/right" />
 
   <node pkg="nodelet" type="nodelet" name="$(arg nodelet_manager_name)" args="manager" output="screen" />
   
-  <node pkg="nodelet" type="nodelet" name="ueye_cam_nodelet"
+  <node pkg="nodelet" type="nodelet" name="ueye_cam_nodelet_right"
         args="load ueye_cam/ueye_cam_nodelet $(arg nodelet_manager_name)">
     <param name="camera_name" type="str" value="$(arg camera_name)" /> <!-- == namespace for topics and services -->
     <param name="camera_topic" type="str" value="image_raw" />
-    <param name="camera_id" type="int" value="0" /> <!-- 0 = any camera; 1+: camera ID ; left cam = 1; right cam = 2-->
+    <param name="camera_id" type="int" value="2" /> <!-- 0 = any camera; 1+: camera ID ; left cam = 1; right cam = 2-->
     <param name="camera_intrinsics_file" type="string" value="" /> <!-- default: ~/.ros/camera_info/<camera_name>.yaml -->
     <param name="camera_parameters_file" type="string" value="" /> <!-- default: ~/.ros/camera_conf/<camera_name>.ini -->
 
